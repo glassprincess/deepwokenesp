@@ -1,1047 +1,920 @@
 --[[
-    SPECTRE — Deepwoken ESP | Matcha Liquid Glass
-    External executor compatible. Matcha native UI.
-    Drawing.new rendering. Auto-save config.
+    Deepwoken / Matcha External ESP (Production)
+    ------------------------------------------------
+    Based on LO's v2 mockup. Real data extraction, 
+    3D to 2D camera projection, and live Deepwoken stat parsing.
+    Matcha native UI, Drawing API, zero-instance footprint.
 ]]
 
--- ============================================================
---  SERVICES
--- ============================================================
+local old = rawget(_G, "__DW_MATCHA_MOCK_ESP_V2") or rawget(_G, "__DW_MATCHA_MOCK_ESP")
+if old and old.Unload then
+    pcall(old.Unload)
+end
+
+assert(type(UI) == "table", "MatchaScripts UI binding is required")
+assert(Drawing ~= nil, "Matcha Drawing API is required")
 
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local UserInputService = game:GetService("UserInputService")
-local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
--- ============================================================
---  UTILITIES
--- ============================================================
+local STATE = {
+    alive = true,
+    conn = nil,
+    lastTick = tick(),
+    slots = {},
+    hotkeys = {},
+    theme = {},
+    hud = {},
+}
+_G.__DW_MATCHA_MOCK_ESP_V2 = STATE
 
-local function clamp(v, min, max) return math.max(min, math.min(max, v)) end
-local function lerp(a, b, t) return a + (b - a) * t end
-local function lerpColor(c1, c2, t)
-    return Color3.fromRGB(
-        clamp(lerp(c1.R * 255, c2.R * 255, t), 0, 255),
-        clamp(lerp(c1.G * 255, c2.G * 255, t), 0, 255),
-        clamp(lerp(c1.B * 255, c2.B * 255, t), 0, 255)
-    )
-end
+local EXEC_NAME, EXEC_VERSION = identifyexecutor()
+local TAB_MAIN = "DW ESP v2"
+local TAB_CFG  = "DW ESP Theme"
 
--- ============================================================
---  CONFIG SYSTEM
--- ============================================================
-
-local Config = {
-    Enabled = true,
-    MaxDistance = 4000,
-
-    ShowBox = true,
-    BoxStyle = "Corner",
-    ShowName = true,
-    ShowLevel = true,
-    ShowHP = true,
-    ShowHPBar = true,
-    ShowPosture = true,
-    ShowPostureBar = true,
-    ShowFood = true,
-    ShowWater = true,
-    ShowTempo = true,
-    ShowDistance = true,
-
-    MatchaAccent = Color3.fromRGB(118, 161, 75),
-    MatchaLight = Color3.fromRGB(150, 190, 100),
-    MatchaDark = Color3.fromRGB(80, 120, 50),
-
-    HPColor = Color3.fromRGB(80, 220, 100),
-    HPLowColor = Color3.fromRGB(220, 60, 60),
-    HPMidColor = Color3.fromRGB(220, 200, 60),
-
-    PostureColor = Color3.fromRGB(160, 110, 230),
-    PostureLowColor = Color3.fromRGB(200, 80, 200),
-
-    FoodColor = Color3.fromRGB(255, 180, 80),
-    WaterColor = Color3.fromRGB(80, 180, 255),
-    TempoColor = Color3.fromRGB(220, 220, 240),
-
-    LevelColor = Color3.fromRGB(255, 215, 100),
-    NameColor = Color3.fromRGB(240, 240, 245),
-    DistanceColor = Color3.fromRGB(160, 160, 170),
-
-    BoxBg = Color3.fromRGB(12, 14, 18),
-    BoxBorder = Color3.fromRGB(50, 55, 65),
-    BarBg = Color3.fromRGB(20, 22, 28),
-    ShadowColor = Color3.fromRGB(0, 0, 0),
-
-    BoxBgOpacity = 0.35,
-    BoxBorderOpacity = 0.5,
-    BarBgOpacity = 0.4,
-    TextOpacity = 1.0,
-    ShadowOpacity = 0.5,
-
-    FontName = 0,
-    FontStats = 2,
-    FontLevel = 4,
-    FontSmall = 3,
-
-    NameSize = 14,
-    LevelSize = 13,
-    StatSize = 12,
-    SmallSize = 11,
+local FONT_ITEMS = {
+    { name = "UI",         value = Drawing.Fonts.UI },
+    { name = "System",     value = Drawing.Fonts.System },
+    { name = "SystemBold", value = Drawing.Fonts.SystemBold },
+    { name = "Monospace",  value = Drawing.Fonts.Monospace },
+    { name = "Pixel",      value = Drawing.Fonts.Pixel },
+    { name = "Fortnite",   value = Drawing.Fonts.Fortnite },
+    { name = "Minecraft",  value = Drawing.Fonts.Minecraft },
 }
 
-local ConfigFile = "SpectreDeepwokenConfig.json"
-
-local function SaveConfig()
-    local safe = {}
-    for k, v in pairs(Config) do
-        if typeof(v) == "Color3" then
-            safe[k] = {v.R, v.G, v.B}
-        elseif typeof(v) ~= "function" then
-            safe[k] = v
-        end
-    end
-    if writefile then
-        writefile(ConfigFile, HttpService:JSONEncode(safe))
-    end
+local FONT_NAMES = {}
+for i = 1, #FONT_ITEMS do
+    FONT_NAMES[i] = FONT_ITEMS[i].name
 end
 
-local function LoadConfig()
-    if isfile and isfile(ConfigFile) and readfile then
-        local ok, data = pcall(function()
-            return HttpService:JSONDecode(readfile(ConfigFile))
-        end)
-        if ok and type(data) == "table" then
-            for k, v in pairs(data) do
-                if type(v) == "table" and #v == 3 then
-                    Config[k] = Color3.fromRGB(
-                        clamp(v[1] * 255, 0, 255),
-                        clamp(v[2] * 255, 0, 255),
-                        clamp(v[3] * 255, 0, 255)
-                    )
-                else
-                    Config[k] = v
-                end
-            end
-        end
-    end
+local PALETTES = {
+    {
+        name = "Deep Mist",
+        accent      = Color3.fromRGB(142, 188, 214),
+        accentAlpha = 228,
+        glass       = Color3.fromRGB(90, 110, 132),
+        glassAlpha  = 56,
+        shadow      = Color3.fromRGB(10, 16, 24),
+        shadowAlpha = 164,
+        text        = Color3.fromRGB(235, 241, 247),
+        subtext     = Color3.fromRGB(164, 178, 193),
+        hpHigh      = Color3.fromRGB(116, 225, 165),
+        hpMid       = Color3.fromRGB(232, 188, 108),
+        hpLow       = Color3.fromRGB(224, 100, 100),
+        posture     = Color3.fromRGB(124, 221, 235),
+        tempo       = Color3.fromRGB(183, 143, 236),
+        food        = Color3.fromRGB(223, 184, 102),
+        water       = Color3.fromRGB(110, 197, 235),
+        tracer      = Color3.fromRGB(112, 162, 205),
+        edge        = Color3.fromRGB(214, 231, 245),
+        danger      = Color3.fromRGB(255, 123, 123),
+    },
+    {
+        name = "Sea Glass",
+        accent      = Color3.fromRGB(129, 220, 213),
+        accentAlpha = 226,
+        glass       = Color3.fromRGB(70, 102, 112),
+        glassAlpha  = 52,
+        shadow      = Color3.fromRGB(7, 14, 18),
+        shadowAlpha = 160,
+        text        = Color3.fromRGB(233, 248, 244),
+        subtext     = Color3.fromRGB(161, 188, 183),
+        hpHigh      = Color3.fromRGB(123, 243, 171),
+        hpMid       = Color3.fromRGB(236, 199, 113),
+        hpLow       = Color3.fromRGB(232, 109, 117),
+        posture     = Color3.fromRGB(129, 232, 255),
+        tempo       = Color3.fromRGB(178, 159, 244),
+        food        = Color3.fromRGB(244, 196, 118),
+        water       = Color3.fromRGB(107, 213, 245),
+        tracer      = Color3.fromRGB(109, 185, 190),
+        edge        = Color3.fromRGB(227, 244, 242),
+        danger      = Color3.fromRGB(255, 132, 132),
+    },
+    {
+        name = "Trial Ember",
+        accent      = Color3.fromRGB(214, 173, 138),
+        accentAlpha = 224,
+        glass       = Color3.fromRGB(103, 84, 74),
+        glassAlpha  = 48,
+        shadow      = Color3.fromRGB(18, 12, 10),
+        shadowAlpha = 168,
+        text        = Color3.fromRGB(247, 236, 226),
+        subtext     = Color3.fromRGB(197, 175, 158),
+        hpHigh      = Color3.fromRGB(123, 232, 151),
+        hpMid       = Color3.fromRGB(236, 194, 110),
+        hpLow       = Color3.fromRGB(243, 113, 96),
+        posture     = Color3.fromRGB(138, 214, 239),
+        tempo       = Color3.fromRGB(201, 156, 241),
+        food        = Color3.fromRGB(241, 188, 106),
+        water       = Color3.fromRGB(122, 206, 245),
+        tracer      = Color3.fromRGB(197, 142, 109),
+        edge        = Color3.fromRGB(246, 225, 211),
+        danger      = Color3.fromRGB(255, 124, 109),
+    },
+}
+
+-- ==================== UTILITIES ====================
+local function clamp(x, a, b)
+    if x < a then return a end
+    if x > b then return b end
+    return x
 end
 
-LoadConfig()
-
--- ============================================================
---  MATCHA UI LOADER
--- ============================================================
-
-local Matcha
-
--- Проверяем глобальные переменные
-if typeof(getgenv) == "function" then
-    Matcha = getgenv().Matcha or getgenv().matcha
-end
-if not Matcha and typeof(matcha) == "table" then
-    Matcha = matcha
-end
-if not Matcha and typeof(Matcha) == "table" then
-    Matcha = Matcha
+local function lerp(a, b, t)
+    return a + (b - a) * t
 end
 
--- Если глобал нет, пробуем загрузить с GitHub
-if not Matcha then
-    local function tryFetch(url)
-        local ok, response = pcall(function()
-            return game:HttpGet(url, true)
-        end)
-        if not ok or not response then return nil end
-        if #response < 20 then return nil end
-        if response:sub(1, 1) == "<" then return nil end
-        if response:find("404: Not Found", 1, true) then return nil end
-        if response:find("404", 1, true) and #response < 10 then return nil end
-        return response
-    end
+local function smooth(current, target, rate, dt)
+    if current == nil then return target end
+    local alpha = 1 - math.exp(-rate * dt)
+    return current + (target - current) * alpha
+end
 
-    local urls = {
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/refs/heads/main/matcha.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/main/matcha.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/refs/heads/main/loader.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/main/loader.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/refs/heads/main/ui.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/main/ui.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/refs/heads/main/library.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/main/library.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/refs/heads/main/Main.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/main/Main.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/refs/heads/main/UIBinding.lua",
-        "https://raw.githubusercontent.com/cconstellation/MatchaScripts/main/UIBinding.lua",
-        "https://github.com/cconstellation/MatchaScripts/raw/main/matcha.lua",
-        "https://github.com/cconstellation/MatchaScripts/raw/main/loader.lua",
-        "https://github.com/cconstellation/MatchaScripts/raw/main/ui.lua",
+local function colorLerp(a, b, t)
+    return Color3.new(lerp(a.R, b.R, t), lerp(a.G, b.G, t), lerp(a.B, b.B, t))
+end
+
+local function alpha255(a)
+    return clamp((a or 255) / 255, 0, 1)
+end
+
+local function safeCorner(obj, radius)
+    pcall(function() obj.Corner = radius end)
+end
+
+local function getValue(id, fallback)
+    local ok, value = pcall(UI.GetValue, id)
+    if not ok or value == nil then return fallback end
+    return value
+end
+
+local function setValue(id, value)
+    pcall(UI.SetValue, id, value)
+end
+
+local function getFont(index, fallback)
+    local idx = math.floor(tonumber(index) or fallback or 0) + 1
+    local item = FONT_ITEMS[idx]
+    if item then return item.value end
+    return FONT_ITEMS[(fallback or 0) + 1].value
+end
+
+local function copyPalette(index)
+    local p = PALETTES[index + 1] or PALETTES[1]
+    STATE.theme.paletteIndex = index
+    STATE.theme.paletteName  = p.name
+    STATE.theme.accent       = p.accent
+    STATE.theme.accentAlpha  = p.accentAlpha
+    STATE.theme.glass        = p.glass
+    STATE.theme.glassAlpha   = p.glassAlpha
+    STATE.theme.shadow       = p.shadow
+    STATE.theme.shadowAlpha  = p.shadowAlpha
+    STATE.theme.text         = p.text
+    STATE.theme.subtext      = p.subtext
+    STATE.theme.hpHigh       = p.hpHigh
+    STATE.theme.hpMid        = p.hpMid
+    STATE.theme.hpLow        = p.hpLow
+    STATE.theme.posture      = p.posture
+    STATE.theme.tempo        = p.tempo
+    STATE.theme.food         = p.food
+    STATE.theme.water        = p.water
+    STATE.theme.tracer       = p.tracer
+    STATE.theme.edge         = p.edge
+    STATE.theme.danger       = p.danger
+end
+copyPalette(0)
+
+-- ==================== DRAWING WRAPPERS ====================
+local function makeSquare(z)
+    local sq = Drawing.new("Square")
+    sq.Visible = false
+    sq.Filled = true
+    sq.ZIndex = z or 1
+    safeCorner(sq, 10)
+    return sq
+end
+
+local function makeLine(z, thickness)
+    local ln = Drawing.new("Line")
+    ln.Visible = false
+    ln.ZIndex = z or 1
+    ln.Thickness = thickness or 1
+    return ln
+end
+
+local function makeText(z, size, font, center)
+    local tx = Drawing.new("Text")
+    tx.Visible = false
+    tx.ZIndex = z or 1
+    tx.Center = center ~= false
+    tx.Outline = true
+    tx.FontSize = size or 12
+    tx.Font = font or Drawing.Fonts.System
+    return tx
+end
+
+local function applySquare(sq, x, y, w, h, color, alpha, z, corner)
+    sq.Position = Vector2.new(x, y)
+    sq.Size = Vector2.new(math.max(1, w), math.max(1, h))
+    sq.Color = color
+    sq.Transparency = alpha
+    sq.ZIndex = z or sq.ZIndex
+    sq.Visible = true
+    if corner then safeCorner(sq, corner) end
+end
+
+local function applyLine(ln, x1, y1, x2, y2, color, alpha, thickness, z)
+    ln.From = Vector2.new(x1, y1)
+    ln.To = Vector2.new(x2, y2)
+    ln.Color = color
+    ln.Transparency = alpha
+    ln.Thickness = thickness or ln.Thickness
+    ln.ZIndex = z or ln.ZIndex
+    ln.Visible = true
+end
+
+local function applyText(tx, text, x, y, color, alpha, size, font, z, center)
+    tx.Text = text
+    tx.Position = Vector2.new(x, y)
+    tx.Color = color
+    tx.Transparency = alpha
+    tx.FontSize = size or tx.FontSize
+    tx.Font = font or tx.Font
+    tx.ZIndex = z or tx.ZIndex
+    tx.Center = center ~= false
+    tx.Visible = true
+end
+
+local function hideObject(obj) obj.Visible = false end
+
+local function makeSlot()
+    return {
+        anim = {},
+        shadow       = makeSquare(1),
+        shadow2      = makeSquare(1),
+        panel        = makeSquare(2),
+        panelEdge    = makeSquare(3),
+        shine        = makeSquare(4),
+        nameShadow   = makeSquare(4),
+        namePanel    = makeSquare(5),
+        nameEdge     = makeSquare(6),
+        subline      = makeSquare(6),
+
+        hpBg         = makeSquare(3),
+        hpFill       = makeSquare(4),
+        hpGlow       = makeSquare(3),
+        poBg         = makeSquare(3),
+        poFill       = makeSquare(4),
+        poGlow       = makeSquare(3),
+
+        tempoBg      = makeSquare(5),
+        foodBg       = makeSquare(5),
+        waterBg      = makeSquare(5),
+
+        tracer       = makeLine(2, 1),
+        tracerGlow   = makeLine(1, 2),
+
+        name         = makeText(7, 15, Drawing.Fonts.SystemBold),
+        tag          = makeText(7, 10, Drawing.Fonts.UI),
+        level        = makeText(7, 11, Drawing.Fonts.Monospace),
+        stats        = makeText(7, 11, Drawing.Fonts.Monospace),
+        distance     = makeText(7, 11, Drawing.Fonts.Monospace),
+        tempo        = makeText(7, 11, Drawing.Fonts.UI),
+        food         = makeText(7, 11, Drawing.Fonts.UI),
+        water        = makeText(7, 11, Drawing.Fonts.UI),
+
+        offPanel     = makeSquare(6),
+        offText      = makeText(7, 12, Drawing.Fonts.SystemBold),
+        offStats     = makeText(7, 10, Drawing.Fonts.Monospace),
+        off1         = makeLine(6, 2),
+        off2         = makeLine(6, 2),
+        off3         = makeLine(5, 4),
+
+        br1          = makeLine(5, 1),
+        br2          = makeLine(5, 1),
+        br3          = makeLine(5, 1),
+        br4          = makeLine(5, 1),
+        br5          = makeLine(5, 1),
+        br6          = makeLine(5, 1),
+        br7          = makeLine(5, 1),
+        br8          = makeLine(5, 1),
     }
+end
 
-    for _, url in ipairs(urls) do
-        local code = tryFetch(url)
-        if code then
-            local ok, result = pcall(function()
-                return loadstring(code)()
-            end)
-            if ok and result and typeof(result) == "table" then
-                Matcha = result
-                break
-            end
-        end
+local function hideSlot(slot)
+    for k, obj in pairs(slot) do
+        if k ~= "anim" then hideObject(obj) end
     end
 end
 
--- ============================================================
---  DEEPWOKEN DATA EXTRACTION
--- ============================================================
-
-local function getHealthColor(ratio)
-    if ratio > 0.5 then
-        return lerpColor(Config.HPMidColor, Config.HPColor, (ratio - 0.5) * 2)
+local function destroySlot(slot)
+    for k, obj in pairs(slot) do
+        if k ~= "anim" then pcall(function() obj:Remove() end) end
     end
-    return lerpColor(Config.HPLowColor, Config.HPMidColor, ratio * 2)
 end
 
-local function getPostureColor(ratio)
-    if ratio > 0.3 then
-        return Config.PostureColor
-    end
-    return lerpColor(Config.PostureLowColor, Config.PostureColor, ratio / 0.3)
+-- Pre-allocate 64 slots for performance
+local MAX_PLAYERS = 64
+for i = 1, MAX_PLAYERS do
+    STATE.slots[i] = makeSlot()
 end
 
-local function getLevelColor(level, localLevel)
-    if not localLevel or localLevel == 0 then return Config.LevelColor end
-    local diff = level - localLevel
-    if diff > 10 then return Color3.fromRGB(255, 80, 80) end
-    if diff > 3 then return Color3.fromRGB(255, 180, 80) end
-    if diff < -10 then return Color3.fromRGB(80, 255, 120) end
-    return Config.LevelColor
+STATE.hud = {
+    shadow   = makeSquare(20),
+    panel    = makeSquare(21),
+    title    = makeText(22, 14, Drawing.Fonts.SystemBold, false),
+    sub      = makeText(22, 11, Drawing.Fonts.Monospace, false),
+    state    = makeText(22, 11, Drawing.Fonts.UI, false),
+}
+
+local function hideHud()
+    for _, obj in pairs(STATE.hud) do hideObject(obj) end
 end
 
-local function extractDeepwokenData(player)
-    local character = player.Character
-    if not character then return nil end
+local function destroyHud()
+    for _, obj in pairs(STATE.hud) do pcall(function() obj:Remove() end) end
+end
 
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return nil end
+-- ==================== DEEPWOKEN DATA EXTRACTION ====================
+local function getStat(character, player, name, fallback)
+    local v = character:GetAttribute(name) or (player and player:GetAttribute(name))
+    if v then return v end
+    local obj = character:FindFirstChild(name)
+    if obj and obj:IsA("NumberValue") then return obj.Value end
+    return fallback
+end
 
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
-    if not rootPart then return nil end
+local function extractData(player)
+    local char = player.Character
+    if not char then return nil end
+    
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return nil end
+    
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local head = char:FindFirstChild("Head")
+    if not root or not head then return nil end
 
-    local head = character:FindFirstChild("Head")
-    if not head then return nil end
+    local localChar = LocalPlayer.Character
+    local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
+    local dist = localRoot and (localRoot.Position - root.Position).Magnitude or 0
 
-    local data = {}
+    local maxHp = hum.MaxHealth > 0 and hum.MaxHealth or 100
+    local hpRatio = hum.Health / maxHp
+    
+    local maxPosture = getStat(char, player, "MaxPosture", 100)
+    local posture = getStat(char, player, "Posture", 0)
+    local poRatio = maxPosture > 0 and (posture / maxPosture) or 0
 
-    data.headPos = head.Position
-    data.feetPos = rootPart.Position - Vector3.new(0, 3, 0)
-    data.rootPos = rootPart.Position
-
-    -- HP
-    data.health = humanoid.Health
-    data.maxHealth = humanoid.MaxHealth
-    if data.maxHealth <= 0 then data.maxHealth = 100 end
-
-    -- Posture
-    data.posture = 0
-    data.maxPosture = 100
-    local p = character:GetAttribute("Posture")
-    if p then data.posture = p end
-    local mp = character:GetAttribute("MaxPosture")
-    if mp then data.maxPosture = mp end
-    if not p then
-        local obj = character:FindFirstChild("Posture")
-        if obj and obj:IsA("NumberValue") then data.posture = obj.Value end
-    end
-    if not p then
-        local pp = player:GetAttribute("Posture")
-        if pp then data.posture = pp end
-    end
-
-    -- Food/Hunger
-    data.food = 0
-    local food = character:GetAttribute("Hunger") or character:GetAttribute("Food")
-    if food then
-        data.food = food
-    else
-        local obj = character:FindFirstChild("Hunger") or character:FindFirstChild("Food")
-        if obj and obj:IsA("NumberValue") then
-            data.food = obj.Value
-        else
-            local pf = player:GetAttribute("Hunger") or player:GetAttribute("Food")
-            if pf then data.food = pf end
-        end
-    end
-
-    -- Water/Thirst
-    data.water = 0
-    local water = character:GetAttribute("Thirst") or character:GetAttribute("Water")
-    if water then
-        data.water = water
-    else
-        local obj = character:FindFirstChild("Thirst") or character:FindFirstChild("Water")
-        if obj and obj:IsA("NumberValue") then
-            data.water = obj.Value
-        else
-            local pw = player:GetAttribute("Thirst") or player:GetAttribute("Water")
-            if pw then data.water = pw end
-        end
-    end
-
-    -- Tempo
-    data.tempo = 0
-    local tempo = character:GetAttribute("Tempo")
-    if tempo then
-        data.tempo = tempo
-    else
-        local obj = character:FindFirstChild("Tempo")
-        if obj and obj:IsA("NumberValue") then
-            data.tempo = obj.Value
-        else
-            local pt = player:GetAttribute("Tempo")
-            if pt then data.tempo = pt end
-        end
-    end
-
-    -- Level
-    data.level = 0
-    local lvl = player:GetAttribute("Level")
-    if lvl then data.level = lvl end
-    if data.level == 0 then
+    local level = player:GetAttribute("Level") or 0
+    if level == 0 then
         local ls = player:FindFirstChild("leaderstats")
         if ls then
-            local lvlObj = ls:FindFirstChild("Level") or ls:FindFirstChild("Power")
-            if lvlObj then
-                if lvlObj:IsA("NumberValue") or lvlObj:IsA("IntValue") then
-                    data.level = lvlObj.Value
-                elseif lvlObj:IsA("StringValue") then
-                    data.level = tonumber(lvlObj.Value) or 0
-                end
-            end
-        end
-    end
-    if data.level == 0 then
-        local pData = player:FindFirstChild("Data")
-        if pData then
-            local lvlObj = pData:FindFirstChild("Level") or pData:FindFirstChild("Power")
-            if lvlObj and lvlObj:IsA("NumberValue") then
-                data.level = lvlObj.Value
-            end
-        end
-    end
-    if data.level == 0 then
-        local cl = character:GetAttribute("Level") or character:GetAttribute("Power")
-        if cl then data.level = cl end
-    end
-
-    -- Name & Surname
-    data.name = humanoid.DisplayName or player.Name
-    data.surname = ""
-
-    local charName = character:GetAttribute("CharacterName") or character:GetAttribute("Name")
-    if charName then data.name = charName end
-
-    local surname = character:GetAttribute("Surname") or character:GetAttribute("LastName")
-    if surname then data.surname = surname end
-
-    if data.surname == "" and data.name:find(" ") then
-        local parts = {}
-        for part in data.name:gmatch("%S+") do
-            table.insert(parts, part)
-        end
-        if #parts >= 2 then
-            data.name = parts[1]
-            data.surname = parts[2]
+            local l = ls:FindFirstChild("Level") or ls:FindFirstChild("Power")
+            if l then level = tonumber(l.Value) or 0 end
         end
     end
 
-    if data.surname == "" then
-        local obj = character:FindFirstChild("Surname") or character:FindFirstChild("LastName")
-        if obj and obj:IsA("StringValue") then
-            data.surname = obj.Value
-        end
-    end
+    local name = hum.DisplayName ~= "" and hum.DisplayName or player.Name
 
-    -- Distance
-    local localChar = LocalPlayer.Character
-    if localChar and localChar:FindFirstChild("HumanoidRootPart") then
-        data.distance = (localChar.HumanoidRootPart.Position - rootPart.Position).Magnitude
-    else
-        data.distance = 0
-    end
-
-    data.alive = humanoid.Health > 0
-    data.smoothHealth = data.health
-    data.smoothPosture = data.posture
-
-    return data
+    return {
+        headPos = head.Position,
+        rootPos = root.Position,
+        dist = dist,
+        hpRatio = hpRatio,
+        hpCur = hum.Health,
+        hpMax = maxHp,
+        poRatio = poRatio,
+        poCur = posture,
+        tempo = getStat(char, player, "Tempo", 0),
+        food = getStat(char, player, "Hunger", getStat(char, player, "Food", 0)),
+        water = getStat(char, player, "Thirst", getStat(char, player, "Water", 0)),
+        level = level,
+        name = name,
+    }
 end
 
--- ============================================================
---  ESP DRAWING CACHE
--- ============================================================
-
-local drawingCache = {}
-
-local function createDrawings()
-    local d = {}
-    local function newDraw(type, props)
-        local obj = Drawing.new(type)
-        for k, v in pairs(props) do obj[k] = v end
-        obj.Visible = false
-        return obj
+local function healthColor(ratio)
+    if ratio >= 0.5 then
+        return colorLerp(STATE.theme.hpMid, STATE.theme.hpHigh, (ratio - 0.5) / 0.5)
     end
-
-    -- Box elements
-    d.boxBg = newDraw("Square", {Filled = true, Color = Config.BoxBg, Transparency = Config.BoxBgOpacity})
-    d.boxBorder = newDraw("Square", {Filled = false, Color = Config.BoxBorder, Thickness = 1, Transparency = Config.BoxBorderOpacity})
-    d.accentLine = newDraw("Line", {Color = Config.MatchaAccent, Thickness = 1.5, Transparency = 1.0})
-    d.accentGlow = newDraw("Line", {Color = Config.MatchaLight, Thickness = 3, Transparency = 0.3})
-
-    -- Corner box (8 lines)
-    d.corners = {}
-    for i = 1, 8 do
-        d.corners[i] = newDraw("Line", {Color = Config.MatchaAccent, Thickness = 1.5, Transparency = 0.8})
-    end
-
-    -- HP bar (left)
-    d.hpBarBg = newDraw("Square", {Filled = true, Color = Config.BarBg, Transparency = Config.BarBgOpacity})
-    d.hpBarFill = newDraw("Square", {Filled = true, Color = Config.HPColor, Transparency = 1.0})
-
-    -- Posture bar (right)
-    d.postureBarBg = newDraw("Square", {Filled = true, Color = Config.BarBg, Transparency = Config.BarBgOpacity})
-    d.postureBarFill = newDraw("Square", {Filled = true, Color = Config.PostureColor, Transparency = 1.0})
-
-    -- Name
-    d.nameText = newDraw("Text", {Color = Config.NameColor, Transparency = Config.TextOpacity, Center = true, Font = Config.FontName, Size = Config.NameSize})
-    d.nameShadow = newDraw("Text", {Color = Config.ShadowColor, Transparency = Config.ShadowOpacity, Center = true, Font = Config.FontName, Size = Config.NameSize})
-
-    -- Surname
-    d.surnameText = newDraw("Text", {Color = Color3.fromRGB(200, 200, 210), Transparency = 0.85, Center = true, Font = Config.FontName, Size = Config.NameSize - 1})
-    d.surnameShadow = newDraw("Text", {Color = Config.ShadowColor, Transparency = Config.ShadowOpacity, Center = true, Font = Config.FontName, Size = Config.NameSize - 1})
-
-    -- Level
-    d.levelText = newDraw("Text", {Color = Config.LevelColor, Transparency = Config.TextOpacity, Center = true, Font = Config.FontLevel, Size = Config.LevelSize})
-    d.levelShadow = newDraw("Text", {Color = Config.ShadowColor, Transparency = Config.ShadowOpacity, Center = true, Font = Config.FontLevel, Size = Config.LevelSize})
-
-    -- HP text
-    d.hpText = newDraw("Text", {Color = Config.HPColor, Transparency = Config.TextOpacity, Center = true, Font = Config.FontStats, Size = Config.StatSize})
-    d.hpShadow = newDraw("Text", {Color = Config.ShadowColor, Transparency = Config.ShadowOpacity, Center = true, Font = Config.FontStats, Size = Config.StatSize})
-
-    -- Posture text
-    d.postureText = newDraw("Text", {Color = Config.PostureColor, Transparency = Config.TextOpacity, Center = true, Font = Config.FontStats, Size = Config.StatSize})
-    d.postureShadow = newDraw("Text", {Color = Config.ShadowColor, Transparency = Config.ShadowOpacity, Center = true, Font = Config.FontStats, Size = Config.StatSize})
-
-    -- Stats (food/water/tempo)
-    d.statsText = newDraw("Text", {Color = Color3.fromRGB(220, 220, 230), Transparency = Config.TextOpacity, Center = true, Font = Config.FontSmall, Size = Config.SmallSize})
-    d.statsShadow = newDraw("Text", {Color = Config.ShadowColor, Transparency = Config.ShadowOpacity, Center = true, Font = Config.FontSmall, Size = Config.SmallSize})
-
-    -- Distance
-    d.distText = newDraw("Text", {Color = Config.DistanceColor, Transparency = 0.7, Center = true, Font = Config.FontSmall, Size = Config.SmallSize})
-    d.distShadow = newDraw("Text", {Color = Config.ShadowColor, Transparency = Config.ShadowOpacity, Center = true, Font = Config.FontSmall, Size = Config.SmallSize})
-
-    return d
+    return colorLerp(STATE.theme.hpLow, STATE.theme.hpMid, ratio / 0.5)
 end
 
-local function hideDrawings(d)
-    if not d then return end
-    for _, obj in pairs(d) do
-        if typeof(obj) == "table" and obj.Visible ~= nil then
-            obj.Visible = false
-        elseif typeof(obj) == "table" then
-            for _, subObj in pairs(obj) do
-                if typeof(subObj) == "table" and subObj.Visible ~= nil then
-                    subObj.Visible = false
-                end
-            end
-        end
+-- ==================== CONFIG & THEME ====================
+local function readConfig()
+    local compact = getValue("dw_v2_compact", false)
+    local cfg = {
+        enabled         = getValue("dw_v2_enabled", true),
+        animate         = getValue("dw_v2_animate", true),
+        compact         = compact,
+        scale           = clamp(getValue("dw_v2_scale", 1.00), 0.75, 1.55),
+        boxHeight       = clamp(math.floor(getValue("dw_v2_height", compact and 150 or 176)), 115, 270),
+        widthFactor     = clamp(getValue("dw_v2_width", compact and 0.38 or 0.43), 0.30, 0.62),
+        barWidth        = clamp(math.floor(getValue("dw_v2_bar_width", compact and 4 or 5)), 2, 12),
+        barGap          = clamp(math.floor(getValue("dw_v2_bar_gap", compact and 7 or 9)), 3, 18),
+        bodyPad         = clamp(math.floor(getValue("dw_v2_body_pad", compact and 5 or 7)), 2, 16),
+        nameOffset      = clamp(math.floor(getValue("dw_v2_name_offset", compact and 30 or 37)), 18, 64),
+        footOffset      = clamp(math.floor(getValue("dw_v2_foot_offset", compact and 15 or 19)), 8, 40),
+        showBody        = getValue("dw_v2_show_body", true),
+        showShine       = getValue("dw_v2_show_shine", true),
+        showBrackets    = getValue("dw_v2_show_brackets", true),
+        showNames       = getValue("dw_v2_show_names", true),
+        showLevel       = getValue("dw_v2_show_level", true),
+        showStats       = getValue("dw_v2_show_stats", true),
+        showResources   = getValue("dw_v2_show_resources", true),
+        showHpBar       = getValue("dw_v2_show_hp_bar", true),
+        showPosture     = getValue("dw_v2_show_posture", true),
+        showShadow      = getValue("dw_v2_show_shadow", true),
+        tracer          = getValue("dw_v2_tracer", true),
+        tracerFrom      = getValue("dw_v2_tracer_from", 0),
+        offscreen       = getValue("dw_v2_offscreen", true),
+        offscreenNames  = getValue("dw_v2_offscreen_names", true),
+        titleFont       = getFont(getValue("dw_v2_font_title", 2), 2),
+        statFont        = getFont(getValue("dw_v2_font_stat", 3), 3),
+        resourceFont    = getFont(getValue("dw_v2_font_resource", 0), 0),
+        watermark       = getValue("dw_v2_watermark", true),
+        focusPulse      = getValue("dw_v2_focus_hold", false),
+        sectionTag      = tostring(getValue("dw_v2_tag", "DEEPWOKEN") or "DEEPWOKEN"),
+    }
+    return cfg
+end
+
+local function applyPresetDefaults(index)
+    copyPalette(index)
+    setValue("dw_v2_palette", index)
+end
+
+local function resetDefaults()
+    setValue("dw_v2_enabled", true)
+    setValue("dw_v2_animate", true)
+    setValue("dw_v2_compact", false)
+    setValue("dw_v2_scale", 1.00)
+    setValue("dw_v2_height", 176)
+    setValue("dw_v2_width", 0.43)
+    setValue("dw_v2_bar_width", 5)
+    setValue("dw_v2_bar_gap", 9)
+    setValue("dw_v2_body_pad", 7)
+    setValue("dw_v2_name_offset", 37)
+    setValue("dw_v2_foot_offset", 19)
+    setValue("dw_v2_show_body", true)
+    setValue("dw_v2_show_shine", true)
+    setValue("dw_v2_show_brackets", true)
+    setValue("dw_v2_show_names", true)
+    setValue("dw_v2_show_level", true)
+    setValue("dw_v2_show_stats", true)
+    setValue("dw_v2_show_resources", true)
+    setValue("dw_v2_show_hp_bar", true)
+    setValue("dw_v2_show_posture", true)
+    setValue("dw_v2_show_shadow", true)
+    setValue("dw_v2_tracer", true)
+    setValue("dw_v2_tracer_from", 0)
+    setValue("dw_v2_offscreen", true)
+    setValue("dw_v2_offscreen_names", true)
+    setValue("dw_v2_font_title", 2)
+    setValue("dw_v2_font_stat", 3)
+    setValue("dw_v2_font_resource", 0)
+    setValue("dw_v2_watermark", true)
+    setValue("dw_v2_tag", "DEEPWOKEN")
+    applyPresetDefaults(0)
+end
+
+local function drawBrackets(slot, x1, y1, x2, y2, color, alpha, thickness, len)
+    applyLine(slot.br1, x1, y1, x1 + len, y1, color, alpha, thickness, 5)
+    applyLine(slot.br2, x1, y1, x1, y1 + len, color, alpha, thickness, 5)
+    applyLine(slot.br3, x2, y1, x2 - len, y1, color, alpha, thickness, 5)
+    applyLine(slot.br4, x2, y1, x2, y1 + len, color, alpha, thickness, 5)
+    applyLine(slot.br5, x1, y2, x1 + len, y2, color, alpha, thickness, 5)
+    applyLine(slot.br6, x1, y2, x1, y2 - len, color, alpha, thickness, 5)
+    applyLine(slot.br7, x2, y2, x2 - len, y2, color, alpha, thickness, 5)
+    applyLine(slot.br8, x2, y2, x2, y2 - len, color, alpha, thickness, 5)
+end
+
+-- ==================== RENDER LOGIC ====================
+local function renderOffscreen(slot, cfg, viewport, cx, cy, name, level, dist, hpRatio)
+    if not cfg.offscreen then return end
+
+    local centerX = viewport.X * 0.5
+    local centerY = viewport.Y * 0.5
+    local dx = cx - centerX
+    local dy = cy - centerY
+    local mag = math.sqrt(dx * dx + dy * dy)
+    if mag < 0.001 then mag = 1 end
+    dx = dx / mag
+    dy = dy / mag
+
+    local margin = cfg.compact and 36 or 48
+    local edgeX = clamp(centerX + dx * (centerX - margin), margin, viewport.X - margin)
+    local edgeY = clamp(centerY + dy * (centerY - margin), margin, viewport.Y - margin)
+
+    local perpX = -dy
+    local perpY = dx
+    local tipX = edgeX
+    local tipY = edgeY
+    local baseX = tipX - dx * 20
+    local baseY = tipY - dy * 20
+    local wing = cfg.compact and 7 or 9
+
+    local hpColor = healthColor(hpRatio)
+    local arrowColor = colorLerp(STATE.theme.accent, hpColor, 0.30)
+
+    applyLine(slot.off3, baseX, baseY, tipX, tipY, arrowColor, 0.28, 5, 5)
+    applyLine(slot.off1, baseX + perpX * wing, baseY + perpY * wing, tipX, tipY, arrowColor, 0.98, 2, 6)
+    applyLine(slot.off2, baseX - perpX * wing, baseY - perpY * wing, tipX, tipY, arrowColor, 0.98, 2, 6)
+
+    if cfg.offscreenNames then
+        local labelW = cfg.compact and 108 or 126
+        local labelH = cfg.compact and 28 or 34
+        local labelX = baseX - labelW * 0.5 - dx * 4
+        local labelY = baseY - labelH * 0.5 - dy * 4
+        applySquare(slot.offPanel, labelX, labelY, labelW, labelH, STATE.theme.shadow, 0.48, 6, 11)
+        applyText(slot.offText, name, labelX + labelW * 0.5, labelY + (cfg.compact and 8 or 10), STATE.theme.text, 1, cfg.compact and 11 or 12, cfg.titleFont, 7)
+        applyText(slot.offStats, string.format("LVL %d · %dst", level, dist), labelX + labelW * 0.5, labelY + (cfg.compact and 18 or 22), STATE.theme.subtext, 1, 10, cfg.statFont, 7)
     end
 end
 
-local function cleanupDrawings(player)
-    if drawingCache[player] then
-        local d = drawingCache[player]
-        for _, obj in pairs(d) do
-            if typeof(obj) == "table" then
-                if obj.Remove then obj:Remove() end
-                for _, subObj in pairs(obj) do
-                    if typeof(subObj) == "table" and subObj.Remove then
-                        subObj:Remove()
-                    end
-                end
-            end
-        end
-        drawingCache[player] = nil
-    end
-end
-
--- ============================================================
---  ESP RENDERING
--- ============================================================
-
-local localLevelCache = 0
-local localLevelTimer = 0
-
-local function getLocalLevel()
-    if tick() - localLevelTimer > 2 then
-        localLevelTimer = tick()
-        local lpData = extractDeepwokenData(LocalPlayer)
-        if lpData then localLevelCache = lpData.level end
-    end
-    return localLevelCache
-end
-
-local function renderESP(player, data)
-    if not drawingCache[player] then
-        drawingCache[player] = createDrawings()
-    end
-    local d = drawingCache[player]
-
-    if not Config.Enabled or not data or not data.alive or data.distance > Config.MaxDistance then
-        hideDrawings(d)
-        return
-    end
-
+local function renderOnscreen(slot, data, cfg, viewport, dt, t, index)
+    -- Real 3D to 2D projection
     local headScreen, headOnScreen = Camera:WorldToViewportPoint(data.headPos)
-    local feetScreen, feetOnScreen = Camera:WorldToViewportPoint(data.feetPos)
+    local feetScreen, feetScreenOn = Camera:WorldToViewportPoint(data.rootPos - Vector3.new(0, 3, 0))
 
-    if not headOnScreen or not feetOnScreen then
-        hideDrawings(d)
-        return
-    end
+    -- Calculate target X, Y, H, W
+    local targetX = (headScreen.X + feetScreen.X) * 0.5
+    local targetY = headScreen.Y
+    local targetH = math.abs(feetScreen.Y - headScreen.Y)
+    if targetH < 10 then targetH = 10 end
+    local targetW = targetH * cfg.widthFactor
+    local targetDist = data.dist
 
-    local boxH = math.abs(feetScreen.Y - headScreen.Y)
-    local boxW = boxH * 0.42
-    if boxH < 10 or boxW < 5 then
-        hideDrawings(d)
-        return
-    end
+    local anim = slot.anim
+    anim.x = smooth(anim.x, targetX, 10, dt)
+    anim.y = smooth(anim.y, targetY, 10, dt)
+    anim.h = smooth(anim.h, targetH, 12, dt)
+    anim.w = smooth(anim.w, targetW, 12, dt)
+    anim.hp = smooth(anim.hp, data.hpRatio, 8, dt)
+    anim.po = smooth(anim.po, data.poRatio, 8, dt)
+    anim.dist = smooth(anim.dist, targetDist, 7, dt)
+    anim.tempo = smooth(anim.tempo, data.tempo, 8, dt)
+    anim.food = smooth(anim.food, data.food, 8, dt)
+    anim.water = smooth(anim.water, data.water, 8, dt)
+    anim.hpCur = smooth(anim.hpCur, data.hpCur, 10, dt)
+    anim.hpMax = smooth(anim.hpMax, data.hpMax, 10, dt)
+    anim.poCur = smooth(anim.poCur, data.poCur, 10, dt)
 
-    local boxX = headScreen.X - boxW / 2
-    local boxY = headScreen.Y
+    local cx = anim.x
+    local cy = anim.y
+    local h = anim.h * cfg.scale
+    local w = anim.w * cfg.scale
+    local x1 = cx - w * 0.5
+    local x2 = cx + w * 0.5
+    local y1 = cy - h * 0.52
+    local y2 = cy + h * 0.48
+    local onScreen = headOnScreen and feetScreenOn
 
-    -- Smooth bars
-    data.smoothHealth = lerp(data.smoothHealth, data.health, 0.15)
-    data.smoothPosture = lerp(data.smoothPosture, data.posture, 0.15)
-
-    local hpRatio = clamp(data.smoothHealth / data.maxHealth, 0, 1)
-    local postureRatio = clamp(data.smoothPosture / data.maxPosture, 0, 1)
-    local hpColor = getHealthColor(hpRatio)
-    local postureColor = getPostureColor(postureRatio)
-
-    -- === BOX ===
-    if Config.ShowBox then
-        if Config.BoxStyle == "Corner" then
-            d.boxBg.Visible = false
-            d.boxBorder.Visible = false
-            d.accentLine.Visible = false
-            d.accentGlow.Visible = false
-
-            local cl = math.clamp(boxW * 0.25, 4, 12)
-
-            d.corners[1].From = Vector2.new(boxX, boxY)
-            d.corners[1].To = Vector2.new(boxX + cl, boxY)
-            d.corners[1].Color = Config.MatchaAccent
-            d.corners[1].Visible = true
-
-            d.corners[2].From = Vector2.new(boxX, boxY)
-            d.corners[2].To = Vector2.new(boxX, boxY + cl)
-            d.corners[2].Color = Config.MatchaAccent
-            d.corners[2].Visible = true
-
-            d.corners[3].From = Vector2.new(boxX + boxW - cl, boxY)
-            d.corners[3].To = Vector2.new(boxX + boxW, boxY)
-            d.corners[3].Color = Config.MatchaAccent
-            d.corners[3].Visible = true
-
-            d.corners[4].From = Vector2.new(boxX + boxW, boxY)
-            d.corners[4].To = Vector2.new(boxX + boxW, boxY + cl)
-            d.corners[4].Color = Config.MatchaAccent
-            d.corners[4].Visible = true
-
-            d.corners[5].From = Vector2.new(boxX, boxY + boxH)
-            d.corners[5].To = Vector2.new(boxX + cl, boxY + boxH)
-            d.corners[5].Color = Config.MatchaAccent
-            d.corners[5].Visible = true
-
-            d.corners[6].From = Vector2.new(boxX, boxY + boxH - cl)
-            d.corners[6].To = Vector2.new(boxX, boxY + boxH)
-            d.corners[6].Color = Config.MatchaAccent
-            d.corners[6].Visible = true
-
-            d.corners[7].From = Vector2.new(boxX + boxW - cl, boxY + boxH)
-            d.corners[7].To = Vector2.new(boxX + boxW, boxY + boxH)
-            d.corners[7].Color = Config.MatchaAccent
-            d.corners[7].Visible = true
-
-            d.corners[8].From = Vector2.new(boxX + boxW, boxY + boxH - cl)
-            d.corners[8].To = Vector2.new(boxX + boxW, boxY + boxH)
-            d.corners[8].Color = Config.MatchaAccent
-            d.corners[8].Visible = true
+    -- Offscreen logic
+    if not onScreen then
+        if cfg.offscreen then
+            renderOffscreen(slot, cfg, viewport, cx, cy, data.name, data.level, math.floor(anim.dist + 0.5), anim.hp)
         else
-            for i = 1, 8 do d.corners[i].Visible = false end
-
-            d.boxBg.Size = Vector2.new(boxW, boxH)
-            d.boxBg.Position = Vector2.new(boxX, boxY)
-            d.boxBg.Color = Config.BoxBg
-            d.boxBg.Transparency = Config.BoxBgOpacity
-            d.boxBg.Visible = true
-
-            d.boxBorder.Size = Vector2.new(boxW, boxH)
-            d.boxBorder.Position = Vector2.new(boxX, boxY)
-            d.boxBorder.Color = Config.BoxBorder
-            d.boxBorder.Thickness = 1
-            d.boxBorder.Transparency = Config.BoxBorderOpacity
-            d.boxBorder.Visible = true
-
-            d.accentGlow.From = Vector2.new(boxX, boxY)
-            d.accentGlow.To = Vector2.new(boxX + boxW, boxY)
-            d.accentGlow.Color = Config.MatchaLight
-            d.accentGlow.Visible = true
-
-            d.accentLine.From = Vector2.new(boxX, boxY)
-            d.accentLine.To = Vector2.new(boxX + boxW, boxY)
-            d.accentLine.Color = Config.MatchaAccent
-            d.accentLine.Visible = true
-        end
-    else
-        d.boxBg.Visible = false
-        d.boxBorder.Visible = false
-        d.accentLine.Visible = false
-        d.accentGlow.Visible = false
-        for i = 1, 8 do d.corners[i].Visible = false end
-    end
-
-    -- === HP BAR (Left) ===
-    if Config.ShowHPBar then
-        local barW = 2.5
-        local fillH = boxH * hpRatio
-        local barX = boxX - barW - 3
-
-        d.hpBarBg.Size = Vector2.new(barW, boxH)
-        d.hpBarBg.Position = Vector2.new(barX, boxY)
-        d.hpBarBg.Color = Config.BarBg
-        d.hpBarBg.Transparency = Config.BarBgOpacity
-        d.hpBarBg.Visible = true
-
-        d.hpBarFill.Size = Vector2.new(barW, fillH)
-        d.hpBarFill.Position = Vector2.new(barX, boxY + (boxH - fillH))
-        d.hpBarFill.Color = hpColor
-        d.hpBarFill.Transparency = 1.0
-        d.hpBarFill.Visible = true
-    else
-        d.hpBarBg.Visible = false
-        d.hpBarFill.Visible = false
-    end
-
-    -- === POSTURE BAR (Right) ===
-    if Config.ShowPostureBar and data.maxPosture > 0 then
-        local barW = 2.5
-        local fillH = boxH * postureRatio
-        local barX = boxX + boxW + 3
-
-        d.postureBarBg.Size = Vector2.new(barW, boxH)
-        d.postureBarBg.Position = Vector2.new(barX, boxY)
-        d.postureBarBg.Color = Config.BarBg
-        d.postureBarBg.Transparency = Config.BarBgOpacity
-        d.postureBarBg.Visible = true
-
-        d.postureBarFill.Size = Vector2.new(barW, fillH)
-        d.postureBarFill.Position = Vector2.new(barX, boxY + (boxH - fillH))
-        d.postureBarFill.Color = postureColor
-        d.postureBarFill.Transparency = 1.0
-        d.postureBarFill.Visible = true
-    else
-        d.postureBarBg.Visible = false
-        d.postureBarFill.Visible = false
-    end
-
-    -- === NAME ===
-    if Config.ShowName then
-        local nameY = boxY - Config.NameSize - 4
-        local nameX = boxX + boxW / 2
-
-        d.nameShadow.Text = data.name
-        d.nameShadow.Position = Vector2.new(nameX + 1, nameY + 1)
-        d.nameShadow.Color = Config.ShadowColor
-        d.nameShadow.Font = Config.FontName
-        d.nameShadow.Size = Config.NameSize
-        d.nameShadow.Visible = true
-
-        d.nameText.Text = data.name
-        d.nameText.Position = Vector2.new(nameX, nameY)
-        d.nameText.Color = Config.NameColor
-        d.nameText.Font = Config.FontName
-        d.nameText.Size = Config.NameSize
-        d.nameText.Visible = true
-
-        if data.surname and data.surname ~= "" then
-            local surnameY = nameY - Config.NameSize
-
-            d.surnameShadow.Text = data.surname
-            d.surnameShadow.Position = Vector2.new(nameX + 1, surnameY + 1)
-            d.surnameShadow.Font = Config.FontName
-            d.surnameShadow.Size = Config.NameSize - 1
-            d.surnameShadow.Visible = true
-
-            d.surnameText.Text = data.surname
-            d.surnameText.Position = Vector2.new(nameX, surnameY)
-            d.surnameText.Font = Config.FontName
-            d.surnameText.Size = Config.NameSize - 1
-            d.surnameText.Visible = true
-        else
-            d.surnameShadow.Visible = false
-            d.surnameText.Visible = false
-        end
-    else
-        d.nameShadow.Visible = false
-        d.nameText.Visible = false
-        d.surnameShadow.Visible = false
-        d.surnameText.Visible = false
-    end
-
-    -- === LEVEL ===
-    if Config.ShowLevel and data.level > 0 then
-        local levelStr = "[" .. data.level .. "]"
-        local nameWidth = #data.name * (Config.NameSize * 0.55)
-        local levelX = boxX + boxW / 2 + nameWidth / 2 + 8
-        local levelY = boxY - Config.NameSize - 4
-
-        local localLevel = getLocalLevel()
-        local lvlColor = getLevelColor(data.level, localLevel)
-
-        d.levelShadow.Text = levelStr
-        d.levelShadow.Position = Vector2.new(levelX + 1, levelY + 1)
-        d.levelShadow.Font = Config.FontLevel
-        d.levelShadow.Size = Config.LevelSize
-        d.levelShadow.Visible = true
-
-        d.levelText.Text = levelStr
-        d.levelText.Position = Vector2.new(levelX, levelY)
-        d.levelText.Font = Config.FontLevel
-        d.levelText.Size = Config.LevelSize
-        d.levelText.Color = lvlColor
-        d.levelText.Visible = true
-    else
-        d.levelShadow.Visible = false
-        d.levelText.Visible = false
-    end
-
-    -- === HP TEXT ===
-    if Config.ShowHP then
-        local hpStr = string.format("%d/%d", math.floor(data.health), math.floor(data.maxHealth))
-        local hpX = boxX - 3 - 2.5 - 4
-        local hpY = boxY + boxH / 2 - Config.StatSize / 2
-
-        d.hpShadow.Text = hpStr
-        d.hpShadow.Position = Vector2.new(hpX + 1, hpY + 1)
-        d.hpShadow.Font = Config.FontStats
-        d.hpShadow.Size = Config.StatSize
-        d.hpShadow.Visible = true
-
-        d.hpText.Text = hpStr
-        d.hpText.Position = Vector2.new(hpX, hpY)
-        d.hpText.Font = Config.FontStats
-        d.hpText.Size = Config.StatSize
-        d.hpText.Color = hpColor
-        d.hpText.Visible = true
-    else
-        d.hpShadow.Visible = false
-        d.hpText.Visible = false
-    end
-
-    -- === POSTURE TEXT ===
-    if Config.ShowPosture and data.maxPosture > 0 then
-        local postStr = string.format("%d/%d", math.floor(data.posture), math.floor(data.maxPosture))
-        local postX = boxX + boxW + 3 + 2.5 + 4
-        local postY = boxY + boxH / 2 - Config.StatSize / 2
-
-        d.postureShadow.Text = postStr
-        d.postureShadow.Position = Vector2.new(postX + 1, postY + 1)
-        d.postureShadow.Font = Config.FontStats
-        d.postureShadow.Size = Config.StatSize
-        d.postureShadow.Visible = true
-
-        d.postureText.Text = postStr
-        d.postureText.Position = Vector2.new(postX, postY)
-        d.postureText.Font = Config.FontStats
-        d.postureText.Size = Config.StatSize
-        d.postureText.Color = postureColor
-        d.postureText.Visible = true
-    else
-        d.postureShadow.Visible = false
-        d.postureText.Visible = false
-    end
-
-    -- === STATS (Food, Water, Tempo) ===
-    local statsParts = {}
-    if Config.ShowFood and data.food > 0 then
-        table.insert(statsParts, "F:" .. math.floor(data.food))
-    end
-    if Config.ShowWater and data.water > 0 then
-        table.insert(statsParts, "W:" .. math.floor(data.water))
-    end
-    if Config.ShowTempo and data.tempo > 0 then
-        table.insert(statsParts, "T:" .. math.floor(data.tempo))
-    end
-
-    if #statsParts > 0 then
-        local statsStr = table.concat(statsParts, "  ")
-        local statsX = boxX + boxW / 2
-        local statsY = boxY + boxH + 3
-
-        d.statsShadow.Text = statsStr
-        d.statsShadow.Position = Vector2.new(statsX + 1, statsY + 1)
-        d.statsShadow.Font = Config.FontSmall
-        d.statsShadow.Size = Config.SmallSize
-        d.statsShadow.Visible = true
-
-        d.statsText.Text = statsStr
-        d.statsText.Position = Vector2.new(statsX, statsY)
-        d.statsText.Font = Config.FontSmall
-        d.statsText.Size = Config.SmallSize
-        d.statsText.Visible = true
-    else
-        d.statsShadow.Visible = false
-        d.statsText.Visible = false
-    end
-
-    -- === DISTANCE ===
-    if Config.ShowDistance and data.distance > 0 then
-        local distStr = math.floor(data.distance) .. "m"
-        local distX = boxX + boxW / 2
-        local distY = boxY + boxH + Config.SmallSize + 5
-
-        d.distShadow.Text = distStr
-        d.distShadow.Position = Vector2.new(distX + 1, distY + 1)
-        d.distShadow.Font = Config.FontSmall
-        d.distShadow.Size = Config.SmallSize
-        d.distShadow.Visible = true
-
-        d.distText.Text = distStr
-        d.distText.Position = Vector2.new(distX, distY)
-        d.distText.Font = Config.FontSmall
-        d.distText.Size = Config.SmallSize
-        d.distText.Visible = true
-    else
-        d.distShadow.Visible = false
-        d.distText.Visible = false
-    end
-end
-
--- ============================================================
---  MATCHA UI BUILD
--- ============================================================
-
-local UI built = false
-
-if Matcha then
-    local ok, err = pcall(function()
-        -- Пробуем CreateWindow — самый частый паттерн
-        local Window
-        local windowOk = pcall(function()
-            Window = Matcha:CreateWindow({
-                Title = "Spectre | Deepwoken",
-                SubTitle = "Liquid Glass ESP",
-                Animation = true
-            })
-        end)
-
-        if not Window then
-            pcall(function()
-                Window = Matcha:Window({
-                    Title = "Spectre | Deepwoken",
-                    SubTitle = "Liquid Glass ESP"
-                })
-            end)
-        end
-
-        if not Window then
-            pcall(function()
-                Window = Matcha.new({
-                    Title = "Spectre | Deepwoken"
-                })
-            end)
-        end
-
-        if not Window then
-            error("Could not create window")
-        end
-
-        -- Функция-обёртка для создания табов
-        local function makeTab(name)
-            local tab
-            pcall(function() tab = Window:CreateTab(name) end)
-            if not tab then pcall(function() tab = Window:Tab(name) end) end
-            if not tab then pcall(function() tab = Window:AddTab(name) end) end
-            if not tab then pcall(function() tab = Window:NewTab(name) end) end
-            return tab
-        end
-
-        -- Функция-обёртка для toggle
-        local function makeToggle(tab, name, default, callback)
-            local ok = pcall(function() tab:CreateToggle(name, default, callback) end)
-            if not ok then pcall(function() tab:Toggle(name, default, callback) end) end
-            if not ok then pcall(function() tab:AddToggle(name, default, callback) end) end
-        end
-
-        -- Функция-обёртка для slider
-        local function makeSlider(tab, name, min, max, default, callback)
-            local ok = pcall(function() tab:CreateSlider(name, min, max, default, callback) end)
-            if not ok then pcall(function() tab:Slider(name, min, max, default, callback) end) end
-            if not ok then pcall(function() tab:AddSlider(name, min, max, default, callback) end) end
-        end
-
-        -- Функция-обёртка для dropdown
-        local function makeDropdown(tab, name, options, default, callback)
-            local ok = pcall(function() tab:CreateDropdown(name, options, default, callback) end)
-            if not ok then pcall(function() tab:Dropdown(name, options, default, callback) end) end
-            if not ok then pcall(function() tab:AddDropdown(name, options, default, callback) end) end
-        end
-
-        -- Функция-обёртка для color picker
-        local function makeColorPicker(tab, name, default, callback)
-            local ok = pcall(function() tab:CreateColorPicker(name, default, callback) end)
-            if not ok then pcall(function() tab:ColorPicker(name, default, callback) end) end
-            if not ok then pcall(function() tab:AddColorPicker(name, default, callback) end) end
-        end
-
-        -- === TAB: MAIN ===
-        local TabMain = makeTab("Main")
-
-        makeToggle(TabMain, "Enable ESP", Config.Enabled, function(state)
-            Config.Enabled = state
-            SaveConfig()
-        end)
-
-        makeSlider(TabMain, "Max Distance", 100, 6000, Config.MaxDistance, function(val)
-            Config.MaxDistance = val
-            SaveConfig()
-        end)
-
-        -- === TAB: VISUALS ===
-        local TabVis = makeTab("Visuals")
-
-        makeToggle(TabVis, "Show Box", Config.ShowBox, function(s) Config.ShowBox = s; SaveConfig() end)
-        makeDropdown(TabVis, "Box Style", {"Corner", "Full"}, Config.BoxStyle, function(v) Config.BoxStyle = v; SaveConfig() end)
-        makeToggle(TabVis, "Show Name", Config.ShowName, function(s) Config.ShowName = s; SaveConfig() end)
-        makeToggle(TabVis, "Show Surname (if available)", Config.ShowName, function(s) Config.ShowName = s; SaveConfig() end)
-        makeToggle(TabVis, "Show Level", Config.ShowLevel, function(s) Config.ShowLevel = s; SaveConfig() end)
-        makeToggle(TabVis, "Show HP Text", Config.ShowHP, function(s) Config.ShowHP = s; SaveConfig() end)
-        makeToggle(TabVis, "Show HP Bar", Config.ShowHPBar, function(s) Config.ShowHPBar = s; SaveConfig() end)
-        makeToggle(TabVis, "Show Posture Text", Config.ShowPosture, function(s) Config.ShowPosture = s; SaveConfig() end)
-        makeToggle(TabVis, "Show Posture Bar", Config.ShowPostureBar, function(s) Config.ShowPostureBar = s; SaveConfig() end)
-        makeToggle(TabVis, "Show Food", Config.ShowFood, function(s) Config.ShowFood = s; SaveConfig() end)
-        makeToggle(TabVis, "Show Water", Config.ShowWater, function(s) Config.ShowWater = s; SaveConfig() end)
-        makeToggle(TabVis, "Show Tempo", Config.ShowTempo, function(s) Config.ShowTempo = s; SaveConfig() end)
-        makeToggle(TabVis, "Show Distance", Config.ShowDistance, function(s) Config.ShowDistance = s; SaveConfig() end)
-
-        -- === TAB: COLORS ===
-        local TabColors = makeTab("Colors")
-
-        makeColorPicker(TabColors, "Matcha Accent", Config.MatchaAccent, function(c) Config.MatchaAccent = c; SaveConfig() end)
-        makeColorPicker(TabColors, "Matcha Light", Config.MatchaLight, function(c) Config.MatchaLight = c; SaveConfig() end)
-        makeColorPicker(TabColors, "Name Color", Config.NameColor, function(c) Config.NameColor = c; SaveConfig() end)
-        makeColorPicker(TabColors, "Level Color", Config.LevelColor, function(c) Config.LevelColor = c; SaveConfig() end)
-        makeColorPicker(TabColors, "HP Color", Config.HPColor, function(c) Config.HPColor = c; SaveConfig() end)
-        makeColorPicker(TabColors, "HP Low Color", Config.HPLowColor, function(c) Config.HPLowColor = c; SaveConfig() end)
-        makeColorPicker(TabColors, "Posture Color", Config.PostureColor, function(c) Config.PostureColor = c; SaveConfig() end)
-        makeColorPicker(TabColors, "Food Color", Config.FoodColor, function(c) Config.FoodColor = c; SaveConfig() end)
-        makeColorPicker(TabColors, "Water Color", Config.WaterColor, function(c) Config.WaterColor = c; SaveConfig() end)
-        makeColorPicker(TabColors, "Tempo Color", Config.TempoColor, function(c) Config.TempoColor = c; SaveConfig() end)
-        makeColorPicker(TabColors, "Distance Color", Config.DistanceColor, function(c) Config.DistanceColor = c; SaveConfig() end)
-        makeColorPicker(TabColors, "Box Background", Config.BoxBg, function(c) Config.BoxBg = c; SaveConfig() end)
-        makeColorPicker(TabColors, "Box Border", Config.BoxBorder, function(c) Config.BoxBorder = c; SaveConfig() end)
-
-        -- === TAB: SETTINGS ===
-        local TabSettings = makeTab("Settings")
-
-        makeSlider(TabSettings, "Box BG Opacity", 0, 1, Config.BoxBgOpacity, function(v) Config.BoxBgOpacity = v; SaveConfig() end)
-        makeSlider(TabSettings, "Box Border Opacity", 0, 1, Config.BoxBorderOpacity, function(v) Config.BoxBorderOpacity = v; SaveConfig() end)
-        makeSlider(TabSettings, "Bar BG Opacity", 0, 1, Config.BarBgOpacity, function(v) Config.BarBgOpacity = v; SaveConfig() end)
-        makeSlider(TabSettings, "Name Size", 10, 20, Config.NameSize, function(v) Config.NameSize = v; SaveConfig() end)
-        makeSlider(TabSettings, "Level Size", 10, 18, Config.LevelSize, function(v) Config.LevelSize = v; SaveConfig() end)
-        makeSlider(TabSettings, "Stat Size", 8, 16, Config.StatSize, function(v) Config.StatSize = v; SaveConfig() end)
-
-        UIBuilt = true
-    end)
-
-    if not ok then
-        print("[Spectre] Matcha UI error: " .. tostring(err))
-    end
-end
-
-if not UIBuilt then
-    print("[Spectre] WARNING: Matcha UI could not be initialized. ESP will run with default config.")
-    print("[Spectre] ESP is active. Edit config file to change settings.")
-end
-
--- ============================================================
---  WATERMARK
--- ============================================================
-
-local watermark = Drawing.new("Text")
-watermark.Text = "SPECTRE | DEEPWOKEN ESP"
-watermark.Color = Config.MatchaAccent
-watermark.Transparency = 0.6
-watermark.Font = 0
-watermark.Size = 13
-watermark.Position = Vector2.new(10, 10)
-watermark.Center = false
-watermark.Visible = true
-
-local watermarkShadow = Drawing.new("Text")
-watermarkShadow.Text = "SPECTRE | DEEPWOKEN ESP"
-watermarkShadow.Color = Config.ShadowColor
-watermarkShadow.Transparency = Config.ShadowOpacity
-watermarkShadow.Font = 0
-watermarkShadow.Size = 13
-watermarkShadow.Position = Vector2.new(11, 11)
-watermarkShadow.Center = false
-watermarkShadow.Visible = true
-
--- ============================================================
---  MAIN RENDER LOOP
--- ============================================================
-
-RunService.RenderStepped:Connect(function()
-    -- Update watermark visibility
-    watermark.Visible = Config.Enabled
-    watermarkShadow.Visible = Config.Enabled
-    watermark.Color = Config.MatchaAccent
-
-    if not Config.Enabled then
-        for player, d in pairs(drawingCache) do
-            hideDrawings(d)
+            hideSlot(slot)
         end
         return
     end
 
-    for _, player in ipairs(Players:GetPlayers()) do
+    -- Unhide and render onscreen
+    hideSlot(slot)
+
+    local accent = STATE.theme.accent
+    local accentA = alpha255(STATE.theme.accentAlpha)
+    local glass = STATE.theme.glass
+    local glassA = alpha255(STATE.theme.glassAlpha)
+    local shadow = STATE.theme.shadow
+    local shadowA = alpha255(STATE.theme.shadowAlpha)
+    local text = STATE.theme.text
+    local subtext = STATE.theme.subtext
+    local edge = STATE.theme.edge
+
+    if cfg.focusPulse then
+        local pulse = 0.5 + 0.5 * math.sin(t * 3.2 + index * 0.7)
+        accent = colorLerp(accent, edge, pulse * 0.22)
+        accentA = clamp(accentA + pulse * 0.08, 0, 1)
+        glassA = clamp(glassA + pulse * 0.03, 0, 1)
+    end
+
+    local pad = cfg.bodyPad
+    local compactShrink = cfg.compact and 0.92 or 1.0
+    local nameW = math.max(cfg.compact and 134 or 152, w + (cfg.compact and 22 or 30))
+    local nameH = cfg.compact and 34 or 40
+    local nameX = cx - nameW * 0.5
+    local nameY = y1 - cfg.nameOffset
+    local lineW = nameW - (cfg.compact and 20 or 24)
+    local brLen = math.floor(math.min(cfg.compact and 14 or 18, w * 0.25))
+
+    local hpColor = healthColor(anim.hp)
+    local poColor = colorLerp(STATE.theme.posture, edge, anim.po * 0.12)
+
+    if cfg.showShadow then
+        applySquare(slot.shadow, x1 - pad - 8, y1 - 5, w + (pad + 8) * 2, h + 10, shadow, shadowA * 0.30, 1, 16)
+        applySquare(slot.shadow2, x1 - pad - 3, y1 - 1, w + (pad + 3) * 2, h + 2, shadow, shadowA * 0.52, 1, 14)
+        applySquare(slot.nameShadow, nameX - 3, nameY - 3, nameW + 6, nameH + 6, shadow, shadowA * 0.46, 4, 16)
+    end
+
+    if cfg.tracer then
+        local fromX, fromY
+        if cfg.tracerFrom == 0 then
+            fromX, fromY = viewport.X * 0.5, viewport.Y - 28
+        elseif cfg.tracerFrom == 1 then
+            fromX, fromY = viewport.X * 0.5, viewport.Y * 0.5
+        else
+            fromX, fromY = viewport.X * 0.5, 24
+        end
+        applyLine(slot.tracerGlow, fromX, fromY, cx, y2 + 6, STATE.theme.tracer, 0.18, 3, 1)
+        applyLine(slot.tracer, fromX, fromY, cx, y2 + 6, STATE.theme.tracer, 0.74, 1, 2)
+    end
+
+    if cfg.showBody then
+        applySquare(slot.panel, x1 - pad, y1, w + pad * 2, h, glass, glassA, 2, 14)
+        applySquare(slot.panelEdge, x1 - pad, y1, w + pad * 2, 1, accent, accentA * 0.90, 3, 4)
+    end
+
+    if cfg.showShine then
+        local shineW = math.max(24, (w + pad * 2) * 0.54 * compactShrink)
+        applySquare(slot.shine, x1 - pad + 8, y1 + 5, shineW, 2, edge, 0.38, 4, 4)
+    end
+
+    applySquare(slot.namePanel, nameX, nameY, nameW, nameH, glass, clamp(glassA + 0.05, 0, 1), 5, 15)
+    applySquare(slot.nameEdge, nameX + 10, nameY + 6, lineW, 1, accent, accentA * 0.95, 6, 2)
+    applySquare(slot.subline, nameX + 10, nameY + nameH - 7, lineW * 0.78, 1, edge, 0.12, 6, 2)
+
+    if cfg.showHpBar then
+        local bx = x1 - cfg.barGap - cfg.barWidth
+        applySquare(slot.hpBg, bx, y1, cfg.barWidth, h, shadow, 0.60, 3, 5)
+        local fh = math.max(1, math.floor(h * anim.hp))
+        applySquare(slot.hpGlow, bx - 1, y2 - fh, cfg.barWidth + 2, fh, hpColor, 0.18, 3, 5)
+        applySquare(slot.hpFill, bx, y2 - fh, cfg.barWidth, fh, hpColor, 0.98, 4, 5)
+    end
+
+    if cfg.showPosture then
+        local bx = x2 + cfg.barGap
+        applySquare(slot.poBg, bx, y1, cfg.barWidth, h, shadow, 0.60, 3, 5)
+        local fh = math.max(1, math.floor(h * anim.po))
+        applySquare(slot.poGlow, bx - 1, y2 - fh, cfg.barWidth + 2, fh, poColor, 0.17, 3, 5)
+        applySquare(slot.poFill, bx, y2 - fh, cfg.barWidth, fh, poColor, 0.96, 4, 5)
+    end
+
+    if cfg.showBrackets then
+        drawBrackets(slot, x1, y1, x2, y2, accent, cfg.compact and 0.70 or 0.84, cfg.compact and 1 or 2, brLen)
+    end
+
+    if cfg.showNames then
+        applyText(slot.tag, cfg.sectionTag, nameX + 34, nameY + 9, accent, accentA, 10, Drawing.Fonts.UI, 7)
+        applyText(slot.name, data.name, cx, nameY + (cfg.compact and 10 or 12), text, 1, cfg.compact and 13 or 15, cfg.titleFont, 7)
+    end
+
+    if cfg.showLevel and data.level > 0 then
+        applyText(slot.level, string.format("LVL %d", data.level), nameX + nameW - 28, nameY + 9, subtext, 1, 11, cfg.statFont, 7)
+    end
+
+    if cfg.showStats then
+        applyText(
+            slot.stats,
+            string.format("HP %d/%d  ·  POST %d  ·  %dst", math.floor(anim.hpCur + 0.5), math.floor(anim.hpMax + 0.5), math.floor(anim.poCur + 0.5), math.floor(anim.dist + 0.5)),
+            cx,
+            nameY + (cfg.compact and 24 or 28),
+            subtext,
+            1,
+            11,
+            cfg.statFont,
+            7
+        )
+    end
+
+    applyText(slot.distance, string.format("%dst", math.floor(anim.dist + 0.5)), cx, y2 + 7, STATE.theme.tracer, 0.92, 10, cfg.statFont, 7)
+
+    if cfg.showResources then
+        local py = y2 + cfg.footOffset
+        local pillW = cfg.compact and 58 or 64
+        local pillH = cfg.compact and 16 or 18
+        local gap = cfg.compact and 6 or 8
+        local leftX = cx - pillW * 1.5 - gap
+        local midX  = cx - pillW * 0.5
+        local rightX = cx + pillW * 0.5 + gap
+
+        applySquare(slot.tempoBg, leftX, py, pillW, pillH, shadow, 0.36, 5, 9)
+        applySquare(slot.foodBg, midX, py, pillW, pillH, shadow, 0.36, 5, 9)
+        applySquare(slot.waterBg, rightX, py, pillW, pillH, shadow, 0.36, 5, 9)
+
+        applyText(slot.tempo, string.format("TP %d", math.floor(anim.tempo + 0.5)), leftX + pillW * 0.5, py + 4, STATE.theme.tempo, 1, 10, cfg.resourceFont, 7)
+        applyText(slot.food,  string.format("FD %d", math.floor(anim.food + 0.5)),  midX + pillW * 0.5, py + 4, STATE.theme.food, 1, 10, cfg.resourceFont, 7)
+        applyText(slot.water, string.format("WT %d", math.floor(anim.water + 0.5)), rightX + pillW * 0.5, py + 4, STATE.theme.water, 1, 10, cfg.resourceFont, 7)
+    end
+end
+
+local function renderHud(cfg, viewport)
+    if not cfg.watermark then
+        hideHud()
+        return
+    end
+
+    local x = 22
+    local y = 22
+    applySquare(STATE.hud.shadow, x - 4, y - 4, 250, 54, STATE.theme.shadow, 0.50, 20, 14)
+    applySquare(STATE.hud.panel, x, y, 242, 46, STATE.theme.glass, clamp(alpha255(STATE.theme.glassAlpha) + 0.04, 0, 1), 21, 14)
+    applyText(STATE.hud.title, "Deepwoken Matcha ESP v2", x + 12, y + 8, STATE.theme.text, 1, 14, Drawing.Fonts.SystemBold, 22, false)
+    applyText(STATE.hud.sub, string.format("%s • %s • %dx%d", STATE.theme.paletteName or "Deep Mist", cfg.compact and "compact" or "glass", viewport.X, viewport.Y), x + 12, y + 24, STATE.theme.subtext, 1, 11, Drawing.Fonts.Monospace, 22, false)
+    applyText(STATE.hud.state, string.format("%s %s", EXEC_NAME, EXEC_VERSION), x + 168, y + 8, STATE.theme.accent, alpha255(STATE.theme.accentAlpha), 10, Drawing.Fonts.UI, 22, false)
+end
+
+-- ==================== MATCHA UI ====================
+pcall(function() UI.RemoveTab(TAB_MAIN) end)
+pcall(function() UI.RemoveTab(TAB_CFG) end)
+
+UI.AddTab(TAB_MAIN, function(tab)
+    local secL = tab:Section("Overlay", "Left", {"General", "Layout", "Elements", "Offscreen"}, 460)
+
+    if secL.page == 0 then
+        secL:Toggle("dw_v2_enabled", "Enabled", true)
+        secL:Toggle("dw_v2_animate", "Smooth animation", true)
+        secL:Toggle("dw_v2_compact", "Compact mode", false)
+        secL:Toggle("dw_v2_watermark", "Watermark", true)
+        secL:SliderFloat("dw_v2_scale", "Global scale", 0.75, 1.55, 1.00, "%.2f")
+        local kb = secL:Keybind("dw_v2_focus_hold", 0x46, "hold")
+        if not STATE.hotkeys.focus then
+            pcall(function() kb:AddToHotkey("Glass focus", "dw_v2_enabled") end)
+            STATE.hotkeys.focus = true
+        end
+    elseif secL.page == 1 then
+        secL:SliderInt("dw_v2_height", "Base height", 115, 270, 176)
+        secL:SliderFloat("dw_v2_width", "Width factor", 0.30, 0.62, 0.43, "%.2f")
+        secL:SliderInt("dw_v2_body_pad", "Body padding", 2, 16, 7)
+        secL:SliderInt("dw_v2_name_offset", "Name offset", 18, 64, 37)
+        secL:SliderInt("dw_v2_foot_offset", "Foot text offset", 8, 40, 19)
+        secL:SliderInt("dw_v2_bar_width", "Bar width", 2, 12, 5)
+        secL:SliderInt("dw_v2_bar_gap", "Bar gap", 3, 18, 9)
+    elseif secL.page == 2 then
+        secL:Toggle("dw_v2_show_body", "Glass body panel", true)
+        secL:Toggle("dw_v2_show_shine", "Top shine", true)
+        secL:Toggle("dw_v2_show_shadow", "Soft shadows", true)
+        secL:Toggle("dw_v2_show_brackets", "Corner brackets", true)
+        secL:Toggle("dw_v2_show_names", "Names", true)
+        secL:Toggle("dw_v2_show_level", "Levels", true)
+        secL:Toggle("dw_v2_show_stats", "HP posture distance text", true)
+        secL:Toggle("dw_v2_show_resources", "Tempo food water pills", true)
+        secL:Toggle("dw_v2_show_hp_bar", "HP bar", true)
+        secL:Toggle("dw_v2_show_posture", "Posture bar", true)
+    elseif secL.page == 3 then
+        secL:Toggle("dw_v2_tracer", "Distance tracer line", true)
+        secL:Combo("dw_v2_tracer_from", "Tracer origin", {"Bottom", "Center", "Top"}, 0)
+        secL:Toggle("dw_v2_offscreen", "Offscreen arrows", true)
+        secL:Toggle("dw_v2_offscreen_names", "Offscreen labels", true)
+        secL:InputText("dw_v2_tag", "Tag", "DEEPWOKEN")
+    end
+
+    local secR = tab:Section("Typography", "Right", {"Fonts", "Preset", "Actions"}, 460)
+    if secR.page == 0 then
+        secR:Combo("dw_v2_font_title", "Title font", FONT_NAMES, 2)
+        secR:Combo("dw_v2_font_stat", "Stat font", FONT_NAMES, 3)
+        secR:Combo("dw_v2_font_resource", "Resource font", FONT_NAMES, 0)
+    elseif secR.page == 1 then
+        secR:Combo("dw_v2_palette", "Palette", {PALETTES[1].name, PALETTES[2].name, PALETTES[3].name}, 0, function(index)
+            applyPresetDefaults(index)
+            notify("Palette applied", TAB_CFG, 2)
+        end)
+    elseif secR.page == 2 then
+        secR:Button("Reset all defaults", 156, 26, function()
+            resetDefaults()
+            notify("v2 defaults restored", TAB_MAIN, 3)
+        end)
+        secR:Button("Hide overlay", 156, 26, function()
+            setValue("dw_v2_enabled", false)
+        end)
+        secR:Button("Show overlay", 156, 26, function()
+            setValue("dw_v2_enabled", true)
+        end)
+    end
+end)
+
+UI.AddTab(TAB_CFG, function(tab)
+    local secL = tab:Section("Theme", "Left", {"Glass", "Accent", "Shadow"}, 460)
+
+    if secL.page == 0 then
+        secL:ColorPicker("dw_v2_glass", STATE.theme.glass.R * 255, STATE.theme.glass.G * 255, STATE.theme.glass.B * 255, STATE.theme.glassAlpha, function(color, alpha)
+            STATE.theme.glass = color
+            STATE.theme.glassAlpha = alpha
+        end)
+        secL:Button("Reset glass", 140, 24, function()
+            local p = PALETTES[(STATE.theme.paletteIndex or 0) + 1] or PALETTES[1]
+            STATE.theme.glass = p.glass
+            STATE.theme.glassAlpha = p.glassAlpha
+            notify("Glass tint reset", TAB_CFG, 2)
+        end)
+    elseif secL.page == 1 then
+        secL:ColorPicker("dw_v2_accent", STATE.theme.accent.R * 255, STATE.theme.accent.G * 255, STATE.theme.accent.B * 255, STATE.theme.accentAlpha, function(color, alpha)
+            STATE.theme.accent = color
+            STATE.theme.accentAlpha = alpha
+        end)
+        secL:Button("Reset accent", 140, 24, function()
+            local p = PALETTES[(STATE.theme.paletteIndex or 0) + 1] or PALETTES[1]
+            STATE.theme.accent = p.accent
+            STATE.theme.accentAlpha = p.accentAlpha
+            notify("Accent tint reset", TAB_CFG, 2)
+        end)
+    elseif secL.page == 2 then
+        secL:ColorPicker("dw_v2_shadow", STATE.theme.shadow.R * 255, STATE.theme.shadow.G * 255, STATE.theme.shadow.B * 255, STATE.theme.shadowAlpha, function(color, alpha)
+            STATE.theme.shadow = color
+            STATE.theme.shadowAlpha = alpha
+        end)
+        secL:Button("Reset shadow", 140, 24, function()
+            local p = PALETTES[(STATE.theme.paletteIndex or 0) + 1] or PALETTES[1]
+            STATE.theme.shadow = p.shadow
+            STATE.theme.shadowAlpha = p.shadowAlpha
+            notify("Shadow tint reset", TAB_CFG, 2)
+        end)
+    end
+
+    local secR = tab:Section("Session", "Right", {"Info", "Helpers"}, 460)
+    if secR.page == 0 then
+        secR:InputText("dw_v2_info_mode", "Mode", "External Live ESP")
+        secR:InputText("dw_v2_info_exec", "Executor", string.format("%s %s", EXEC_NAME, EXEC_VERSION))
+    elseif secR.page == 1 then
+        secR:Button("Notify loaded", 160, 26, function()
+            notify("Deepwoken Matcha ESP v2 active", TAB_MAIN, 3)
+        end)
+        secR:Button("Preset Deep Mist", 160, 26, function()
+            applyPresetDefaults(0)
+            notify("Deep Mist preset applied", TAB_CFG, 2)
+        end)
+        secR:Button("Preset Sea Glass", 160, 26, function()
+            applyPresetDefaults(1)
+            notify("Sea Glass preset applied", TAB_CFG, 2)
+        end)
+        secR:Button("Preset Trial Ember", 160, 26, function()
+            applyPresetDefaults(2)
+            notify("Trial Ember preset applied", TAB_CFG, 2)
+        end)
+    end
+end)
+
+function STATE.Unload()
+    STATE.alive = false
+    if STATE.conn then
+        pcall(function() STATE.conn:Disconnect() end)
+        STATE.conn = nil
+    end
+    for i = 1, #STATE.slots do
+        destroySlot(STATE.slots[i])
+    end
+    destroyHud()
+    pcall(function() UI.RemoveTab(TAB_MAIN) end)
+    pcall(function() UI.RemoveTab(TAB_CFG) end)
+    _G.__DW_MATCHA_MOCK_ESP_V2 = nil
+end
+
+-- ==================== MAIN LOOP ====================
+STATE.conn = RunService.RenderStepped:Connect(function()
+    if not STATE.alive then return end
+
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+
+    local now = tick()
+    local dt = clamp(now - (STATE.lastTick or now), 0.001, 0.05)
+    STATE.lastTick = now
+
+    local viewport = camera.ViewportSize
+    local cfg = readConfig()
+
+    if not cfg.enabled then
+        for i = 1, #STATE.slots do
+            hideSlot(STATE.slots[i])
+        end
+        hideHud()
+        return
+    end
+
+    renderHud(cfg, viewport)
+
+    local players = Players:GetPlayers()
+    local slotIdx = 1
+
+    for _, player in ipairs(players) do
         if player ~= LocalPlayer then
-            local data = extractDeepwokenData(player)
-            if data then
-                renderESP(player, data)
-            else
-                if drawingCache[player] then
-                    hideDrawings(drawingCache[player])
-                end
+            local data = extractData(player)
+            if data and slotIdx <= MAX_PLAYERS then
+                renderOnscreen(STATE.slots[slotIdx], data, cfg, viewport, dt, now, slotIdx)
+                slotIdx = slotIdx + 1
             end
         end
     end
+
+    -- Hide unused slots
+    for i = slotIdx, MAX_PLAYERS do
+        hideSlot(STATE.slots[i])
+    end
 end)
 
-Players.PlayerRemoving:Connect(function(player)
-    cleanupDrawings(player)
-end)
-
-print("[Spectre] Deepwoken ESP loaded successfully.")
-if UIBuilt then
-    print("[Spectre] Matcha UI initialized. Open Matcha menu to configure.")
-else
-    print("[Spectre] Running with default config (UI not available).")
-end
+notify("Loaded Deepwoken Matcha ESP v2", TAB_MAIN, 4)
