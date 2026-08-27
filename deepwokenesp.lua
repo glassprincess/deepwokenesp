@@ -1,6 +1,6 @@
 --[[
-    SPECTRE — Deepwoken ESP | Matcha Integration
-    Конфиг система, UI через Matcha, Liquid Glass aesthetic.
+    SPECTRE — Deepwoken ESP | Matcha Liquid Glass (External Fix)
+    Полностью самодостаточный, без Instance.new и loadstring.
 ]]
 
 -- ============================================================
@@ -11,6 +11,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
@@ -34,7 +35,7 @@ local Config = {
     MaxDistance = 4000,
     
     ShowBox = true,
-    BoxStyle = "Corner", -- "Corner" or "Full"
+    BoxStyle = "Corner",
     ShowName = true,
     ShowLevel = true,
     ShowHP = true,
@@ -46,7 +47,6 @@ local Config = {
     ShowTempo = true,
     ShowDistance = true,
     
-    -- Colors (Matcha Liquid Glass)
     MatchaAccent = Color3.fromRGB(118, 161, 75),
     MatchaLight = Color3.fromRGB(150, 190, 100),
     
@@ -89,13 +89,13 @@ local function SaveConfig()
         end
     end
     if writefile then
-        writefile(ConfigFile, game:GetService("HttpService"):JSONEncode(safeConfig))
+        writefile(ConfigFile, HttpService:JSONEncode(safeConfig))
     end
 end
 
 local function LoadConfig()
     if isfile and isfile(ConfigFile) and readfile then
-        local data = game:GetService("HttpService"):JSONDecode(readfile(ConfigFile))
+        local data = HttpService:JSONDecode(readfile(ConfigFile))
         for k, v in pairs(data) do
             if type(v) == "table" and #v == 3 then
                 Config[k] = Color3.fromRGB(v[1] * 255, v[2] * 255, v[3] * 255)
@@ -190,16 +190,13 @@ local function extractDeepwokenData(player)
 end
 
 -- ============================================================
---  RENDERING
+--  ESP RENDERING
 -- ============================================================
 
 local drawingCache = {}
 
 local function createDrawings()
     local d = {}
-    local drawTypes = {"Square", "Line", "Text"}
-    
-    -- Helper to create standard drawings
     local function newDraw(type, props)
         local obj = Drawing.new(type)
         for k, v in pairs(props) do obj[k] = v end
@@ -222,10 +219,9 @@ local function createDrawings()
     d.postureBarBg = newDraw("Square", {Filled = true, Color = Config.BarBg, Transparency = Config.BarBgOpacity})
     d.postureBarFill = newDraw("Square", {Filled = true, Color = Config.PostureColor, Transparency = 1.0})
 
-    local textDefaults = {Color = Config.NameColor, Transparency = Config.TextOpacity, Center = true, Outline = false, Font = 0, Size = 14}
-    d.nameText = newDraw("Text", textDefaults)
+    d.nameText = newDraw("Text", {Color = Config.NameColor, Transparency = Config.TextOpacity, Center = true, Font = 0, Size = 14})
     d.nameShadow = newDraw("Text", {Color = Config.ShadowColor, Transparency = Config.ShadowOpacity, Center = true, Font = 0, Size = 14})
-    d.surnameText = newDraw("Text", textDefaults)
+    d.surnameText = newDraw("Text", {Color = Config.NameColor, Transparency = Config.TextOpacity, Center = true, Font = 0, Size = 13})
     d.surnameShadow = newDraw("Text", {Color = Config.ShadowColor, Transparency = Config.ShadowOpacity, Center = true, Font = 0, Size = 13})
     
     d.levelText = newDraw("Text", {Color = Config.LevelColor, Transparency = Config.TextOpacity, Center = true, Font = 4, Size = 13})
@@ -247,6 +243,7 @@ local function createDrawings()
 end
 
 local function hideDrawings(d)
+    if not d then return end
     for _, obj in pairs(d) do
         if typeof(obj) == "table" and obj.Visible ~= nil then
             obj.Visible = false
@@ -257,23 +254,6 @@ local function hideDrawings(d)
                 end
             end
         end
-    end
-end
-
-local function cleanupDrawings(player)
-    if drawingCache[player] then
-        local d = drawingCache[player]
-        for _, obj in pairs(d) do
-            if typeof(obj) == "table" then
-                if obj.Remove then obj:Remove() end
-                for _, subObj in pairs(obj) do
-                    if typeof(subObj) == "table" and subObj.Remove then
-                        subObj:Remove()
-                    end
-                end
-            end
-        end
-        drawingCache[player] = nil
     end
 end
 
@@ -309,25 +289,16 @@ local function renderESP(player, data)
     local hpColor = getHealthColor(hpRatio)
     local postureColor = getPostureColor(postureRatio)
 
-    -- === BOX ===
     if Config.ShowBox then
         if Config.BoxStyle == "Corner" then
-            d.boxBg.Visible = false
-            d.boxBorder.Visible = false
-            d.accentLine.Visible = false
-            d.accentGlow.Visible = false
-
+            d.boxBg.Visible = false; d.boxBorder.Visible = false; d.accentLine.Visible = false; d.accentGlow.Visible = false
             local cl = math.clamp(boxW * 0.25, 4, 12)
-            -- Top-Left
             d.corners[1].From = Vector2.new(boxX, boxY); d.corners[1].To = Vector2.new(boxX + cl, boxY); d.corners[1].Visible = true
             d.corners[2].From = Vector2.new(boxX, boxY); d.corners[2].To = Vector2.new(boxX, boxY + cl); d.corners[2].Visible = true
-            -- Top-Right
             d.corners[3].From = Vector2.new(boxX + boxW - cl, boxY); d.corners[3].To = Vector2.new(boxX + boxW, boxY); d.corners[3].Visible = true
             d.corners[4].From = Vector2.new(boxX + boxW, boxY); d.corners[4].To = Vector2.new(boxX + boxW, boxY + cl); d.corners[4].Visible = true
-            -- Bottom-Left
             d.corners[5].From = Vector2.new(boxX, boxY + boxH); d.corners[5].To = Vector2.new(boxX + cl, boxY + boxH); d.corners[5].Visible = true
             d.corners[6].From = Vector2.new(boxX, boxY + boxH - cl); d.corners[6].To = Vector2.new(boxX, boxY + boxH); d.corners[6].Visible = true
-            -- Bottom-Right
             d.corners[7].From = Vector2.new(boxX + boxW - cl, boxY + boxH); d.corners[7].To = Vector2.new(boxX + boxW, boxY + boxH); d.corners[7].Visible = true
             d.corners[8].From = Vector2.new(boxX + boxW, boxY + boxH - cl); d.corners[8].To = Vector2.new(boxX + boxW, boxY + boxH); d.corners[8].Visible = true
         else
@@ -342,7 +313,6 @@ local function renderESP(player, data)
         for i=1, 8 do d.corners[i].Visible = false end
     end
 
-    -- === HP BAR ===
     if Config.ShowHPBar then
         local barW = 2.5
         local fillH = boxH * hpRatio
@@ -352,7 +322,6 @@ local function renderESP(player, data)
         d.hpBarBg.Visible = false; d.hpBarFill.Visible = false
     end
 
-    -- === POSTURE BAR ===
     if Config.ShowPostureBar and data.maxPosture > 0 then
         local barW = 2.5
         local fillH = boxH * postureRatio
@@ -362,7 +331,6 @@ local function renderESP(player, data)
         d.postureBarBg.Visible = false; d.postureBarFill.Visible = false
     end
 
-    -- === NAME ===
     if Config.ShowName then
         local nameY = boxY - 18
         local nameX = boxX + boxW / 2
@@ -379,7 +347,6 @@ local function renderESP(player, data)
         d.nameShadow.Visible = false; d.nameText.Visible = false; d.surnameShadow.Visible = false; d.surnameText.Visible = false
     end
 
-    -- === LEVEL ===
     if Config.ShowLevel and data.level > 0 then
         local levelStr = "[" .. data.level .. "]"
         local nameWidth = #data.name * 8
@@ -395,7 +362,6 @@ local function renderESP(player, data)
         d.levelShadow.Visible = false; d.levelText.Visible = false
     end
 
-    -- === HP TEXT ===
     if Config.ShowHP then
         local hpStr = string.format("%d/%d", math.floor(data.health), math.floor(data.maxHealth))
         local hpX = boxX - 3 - 2.5 - 4
@@ -406,7 +372,6 @@ local function renderESP(player, data)
         d.hpShadow.Visible = false; d.hpText.Visible = false
     end
 
-    -- === POSTURE TEXT ===
     if Config.ShowPosture and data.maxPosture > 0 then
         local postStr = string.format("%d/%d", math.floor(data.posture), math.floor(data.maxPosture))
         local postX = boxX + boxW + 3 + 2.5 + 4
@@ -417,7 +382,6 @@ local function renderESP(player, data)
         d.postureShadow.Visible = false; d.postureText.Visible = false
     end
 
-    -- === STATS ===
     local statsParts = {}
     if Config.ShowFood and data.food > 0 then table.insert(statsParts, "F:" .. math.floor(data.food)) end
     if Config.ShowWater and data.water > 0 then table.insert(statsParts, "W:" .. math.floor(data.water)) end
@@ -433,7 +397,6 @@ local function renderESP(player, data)
         d.statsShadow.Visible = false; d.statsText.Visible = false
     end
 
-    -- === DISTANCE ===
     if Config.ShowDistance and data.distance > 0 then
         local distStr = math.floor(data.distance) .. "m"
         local distX = boxX + boxW / 2
@@ -446,93 +409,171 @@ local function renderESP(player, data)
 end
 
 -- ============================================================
---  MATCHA UI INTEGRATION
+--  CUSTOM MATCHA LIQUID GLASS UI (Drawing Based)
 -- ============================================================
--- Используем стандартный загрузчик Matcha UI
-local success, Matcha = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/cconstellation/MatchaScripts/main/matcha.lua"))()
-end)
 
-if not success or not Matcha then
-    warn("[Spectre] Matcha UI library not found. Loading fallback.")
-    -- Fallback: if not executed via Matcha executor, create a simple GUI
-    local CoreGui = game:GetService("CoreGui")
-    local oldGui = CoreGui:FindFirstChild("SpectreFallback")
-    if oldGui then oldGui:Destroy() end
-    
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "SpectreFallback"
-    gui.Parent = CoreGui
-    
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 250, 0, 100)
-    frame.Position = UDim2.new(0, 50, 0, 50)
-    frame.BackgroundColor3 = Config.MatchaAccent
-    frame.Parent = gui
-    
-    local text = Instance.new("TextLabel")
-    text.Size = UDim2.new(1, 0, 1, 0)
-    text.Text = "Spectre Loaded\nMatcha UI not found\nESP Active with default config"
-    text.TextColor3 = Color3.new(1, 1, 1)
-    text.Parent = frame
-else
-    local Window = Matcha:CreateWindow({
-        Title = "Spectre | Deepwoken",
-        SubTitle = "Liquid Glass ESP"
-    })
+local Menu = {
+    Open = true,
+    X = 100,
+    Y = 100,
+    W = 260,
+    H = 40,
+    Items = {},
+    Dragging = false,
+    DragOffset = Vector2.new(0,0)
+}
 
-    local TabMain = Window:CreateTab("Main")
-    local TabVisuals = Window:CreateTab("Visuals")
-    local TabColors = Window:CreateTab("Colors")
-
-    -- Main Tab
-    TabMain:CreateToggle("Enable ESP", Config.Enabled, function(state)
-        Config.Enabled = state
-        SaveConfig()
-    end)
-
-    TabMain:CreateSlider("Max Distance", 100, 6000, Config.MaxDistance, function(val)
-        Config.MaxDistance = val
-        SaveConfig()
-    end)
-
-    -- Visuals Tab
-    TabVisuals:CreateToggle("Show Box", Config.ShowBox, function(state) Config.ShowBox = state; SaveConfig() end)
-    TabVisuals:CreateDropdown("Box Style", {"Corner", "Full"}, Config.BoxStyle, function(val) Config.BoxStyle = val; SaveConfig() end)
-    TabVisuals:CreateToggle("Show Name", Config.ShowName, function(state) Config.ShowName = state; SaveConfig() end)
-    TabVisuals:CreateToggle("Show Level", Config.ShowLevel, function(state) Config.ShowLevel = state; SaveConfig() end)
-    TabVisuals:CreateToggle("Show HP Text", Config.ShowHP, function(state) Config.ShowHP = state; SaveConfig() end)
-    TabVisuals:CreateToggle("Show HP Bar", Config.ShowHPBar, function(state) Config.ShowHPBar = state; SaveConfig() end)
-    TabVisuals:CreateToggle("Show Posture Text", Config.ShowPosture, function(state) Config.ShowPosture = state; SaveConfig() end)
-    TabVisuals:CreateToggle("Show Posture Bar", Config.ShowPostureBar, function(state) Config.ShowPostureBar = state; SaveConfig() end)
-    TabVisuals:CreateToggle("Show Food", Config.ShowFood, function(state) Config.ShowFood = state; SaveConfig() end)
-    TabVisuals:CreateToggle("Show Water", Config.ShowWater, function(state) Config.ShowWater = state; SaveConfig() end)
-    TabVisuals:CreateToggle("Show Tempo", Config.ShowTempo, function(state) Config.ShowTempo = state; SaveConfig() end)
-    TabVisuals:CreateToggle("Show Distance", Config.ShowDistance, function(state) Config.ShowDistance = state; SaveConfig() end)
-
-    -- Colors Tab
-    local function addColorPicker(tab, name, defaultColor, configKey)
-        tab:CreateColorPicker(name, defaultColor, function(color)
-            Config[configKey] = color
-            SaveConfig()
-        end)
-    end
-
-    addColorPicker(TabColors, "Matcha Accent", Config.MatchaAccent, "MatchaAccent")
-    addColorPicker(TabColors, "Name Color", Config.NameColor, "NameColor")
-    addColorPicker(TabColors, "Level Color", Config.LevelColor, "LevelColor")
-    addColorPicker(TabColors, "HP Color", Config.HPColor, "HPColor")
-    addColorPicker(TabColors, "Posture Color", Config.PostureColor, "PostureColor")
-    addColorPicker(TabColors, "Food Color", Config.FoodColor, "FoodColor")
-    addColorPicker(TabColors, "Water Color", Config.WaterColor, "WaterColor")
-    addColorPicker(TabColors, "Tempo Color", Config.TempoColor, "TempoColor")
+function Menu:AddToggle(text, configKey)
+    table.insert(Menu.Items, {Text = text, Key = configKey, Clicked = false})
+    Menu.H = 45 + #Menu.Items * 22
 end
+
+Menu:AddToggle("Enable ESP", "Enabled")
+Menu:AddToggle("Show Box", "ShowBox")
+Menu:AddToggle("Show Name", "ShowName")
+Menu:AddToggle("Show Level", "ShowLevel")
+Menu:AddToggle("Show HP Bar", "ShowHPBar")
+Menu:AddToggle("Show HP Text", "ShowHP")
+Menu:AddToggle("Show Posture Bar", "ShowPostureBar")
+Menu:AddToggle("Show Posture Text", "ShowPosture")
+Menu:AddToggle("Show Food", "ShowFood")
+Menu:AddToggle("Show Water", "ShowWater")
+Menu:AddToggle("Show Tempo", "ShowTempo")
+Menu:AddToggle("Show Distance", "ShowDistance")
+
+local mBg = Drawing.new("Square")
+mBg.Filled = true
+mBg.Color = Color3.fromRGB(18, 20, 24)
+mBg.Transparency = 0.95
+mBg.Visible = false
+
+local mBorder = Drawing.new("Square")
+mBorder.Filled = false
+mBorder.Color = Config.MatchaAccent
+mBorder.Thickness = 1
+mBorder.Visible = false
+
+local mAccent = Drawing.new("Line")
+mAccent.Color = Config.MatchaAccent
+mAccent.Thickness = 2
+mAccent.Visible = false
+
+local mHeader = Drawing.new("Text")
+mHeader.Text = "SPECTRE | DEEPWOKEN"
+mHeader.Color = Config.MatchaLight
+mHeader.Size = 15
+mHeader.Font = 0
+mHeader.Center = false
+mHeader.Visible = false
+
+local mWater = Drawing.new("Text")
+mWater.Text = "Matcha External"
+mWater.Color = Color3.fromRGB(100, 100, 110)
+mWater.Size = 11
+mWater.Font = 3
+mWater.Center = false
+mWater.Visible = false
+
+local mItems = {}
+for i = 1, #Menu.Items do
+    local txt = Drawing.new("Text")
+    txt.Size = 14
+    txt.Font = 0
+    txt.Center = false
+    txt.Visible = false
+    table.insert(mItems, txt)
+end
+
+UserInputService.InputBegan:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.RightShift then
+        Menu.Open = not Menu.Open
+    end
+end)
 
 -- ============================================================
 --  MAIN LOOP
 -- ============================================================
 
 RunService.RenderStepped:Connect(function()
+    -- === RENDER MENU ===
+    if Menu.Open then
+        local mousePos = UserInputService:GetMouseLocation()
+        local mousePressed = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        
+        mBg.Size = Vector2.new(Menu.W, Menu.H)
+        mBg.Position = Vector2.new(Menu.X, Menu.Y)
+        mBg.Visible = true
+        
+        mBorder.Size = Vector2.new(Menu.W, Menu.H)
+        mBorder.Position = Vector2.new(Menu.X, Menu.Y)
+        mBorder.Visible = true
+        
+        mAccent.From = Vector2.new(Menu.X, Menu.Y + 25)
+        mAccent.To = Vector2.new(Menu.X + Menu.W, Menu.Y + 25)
+        mAccent.Visible = true
+        
+        mHeader.Position = Vector2.new(Menu.X + 10, Menu.Y + 5)
+        mHeader.Visible = true
+        
+        mWater.Position = Vector2.new(Menu.X + Menu.W - 90, Menu.Y + 8)
+        mWater.Visible = true
+        
+        if mousePressed and mousePos.X >= Menu.X and mousePos.X <= Menu.X + Menu.W and mousePos.Y >= Menu.Y and mousePos.Y <= Menu.Y + 25 then
+            if not Menu.Dragging then
+                Menu.Dragging = true
+                Menu.DragOffset = Vector2.new(mousePos.X - Menu.X, mousePos.Y - Menu.Y)
+            end
+        elseif not mousePressed then
+            Menu.Dragging = false
+        end
+        
+        if Menu.Dragging then
+            Menu.X = mousePos.X - Menu.DragOffset.X
+            Menu.Y = mousePos.Y - Menu.DragOffset.X
+            Menu.Y = mousePos.Y - Menu.DragOffset.Y
+        end
+        
+        for i, item in ipairs(Menu.Items) do
+            local txt = mItems[i]
+            local itemY = Menu.Y + 35 + (i - 1) * 22
+            local itemX = Menu.X + 15
+            
+            local state = Config[item.Key]
+            local prefix = state and "[ON]  " or "[OFF]  "
+            local color = state and Config.MatchaAccent or Color3.fromRGB(150, 150, 150)
+            
+            txt.Text = prefix .. item.Text
+            txt.Color = color
+            txt.Position = Vector2.new(itemX, itemY)
+            txt.Visible = true
+            
+            if mousePressed then
+                if mousePos.X >= itemX and mousePos.X <= itemX + Menu.W and
+                   mousePos.Y >= itemY and mousePos.Y <= itemY + 20 then
+                    if not item.Clicked then
+                        Config[item.Key] = not Config[item.Key]
+                        SaveConfig()
+                        item.Clicked = true
+                    end
+                else
+                    item.Clicked = false
+                end
+            else
+                item.Clicked = false
+            end
+        end
+    else
+        mBg.Visible = false
+        mBorder.Visible = false
+        mAccent.Visible = false
+        mHeader.Visible = false
+        mWater.Visible = false
+        for _, txt in ipairs(mItems) do
+            txt.Visible = false
+        end
+    end
+
+    -- === RENDER ESP ===
     if not Config.Enabled then
         for player, d in pairs(drawingCache) do
             hideDrawings(d)
@@ -552,6 +593,4 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-Players.PlayerRemoving:Connect(cleanupDrawings)
-
-print("[Spectre] Deepwoken ESP loaded successfully.")
+print("[Spectre] Deepwoken ESP loaded. Press RightShift to open menu.")
