@@ -1,8 +1,6 @@
 --[[
-    Deepwoken / Matcha External ESP (Production)
-    ------------------------------------------------
-    Based on LO's v2 mockup. Real data extraction, 
-    3D to 2D camera projection, and live Deepwoken stat parsing.
+    Deepwoken / Matcha External ESP (Production Fixed)
+    Real data extraction, 3D to 2D camera projection.
     Matcha native UI, Drawing API, zero-instance footprint.
 ]]
 
@@ -212,7 +210,7 @@ local function makeText(z, size, font, center)
     tx.ZIndex = z or 1
     tx.Center = center ~= false
     tx.Outline = true
-    tx.FontSize = size or 12
+    tx.Size = size or 12 -- ИСПРАВЛЕНО: FontSize -> Size
     tx.Font = font or Drawing.Fonts.System
     return tx
 end
@@ -242,7 +240,7 @@ local function applyText(tx, text, x, y, color, alpha, size, font, z, center)
     tx.Position = Vector2.new(x, y)
     tx.Color = color
     tx.Transparency = alpha
-    tx.FontSize = size or tx.FontSize
+    tx.Size = size or tx.Size -- ИСПРАВЛЕНО: FontSize -> Size
     tx.Font = font or tx.Font
     tx.ZIndex = z or tx.ZIndex
     tx.Center = center ~= false
@@ -317,7 +315,6 @@ local function destroySlot(slot)
     end
 end
 
--- Pre-allocate 64 slots for performance
 local MAX_PLAYERS = 64
 for i = 1, MAX_PLAYERS do
     STATE.slots[i] = makeSlot()
@@ -538,11 +535,9 @@ local function renderOffscreen(slot, cfg, viewport, cx, cy, name, level, dist, h
 end
 
 local function renderOnscreen(slot, data, cfg, viewport, dt, t, index)
-    -- Real 3D to 2D projection
     local headScreen, headOnScreen = Camera:WorldToViewportPoint(data.headPos)
     local feetScreen, feetScreenOn = Camera:WorldToViewportPoint(data.rootPos - Vector3.new(0, 3, 0))
 
-    -- Calculate target X, Y, H, W
     local targetX = (headScreen.X + feetScreen.X) * 0.5
     local targetY = headScreen.Y
     local targetH = math.abs(feetScreen.Y - headScreen.Y)
@@ -575,7 +570,6 @@ local function renderOnscreen(slot, data, cfg, viewport, dt, t, index)
     local y2 = cy + h * 0.48
     local onScreen = headOnScreen and feetScreenOn
 
-    -- Offscreen logic
     if not onScreen then
         if cfg.offscreen then
             renderOffscreen(slot, cfg, viewport, cx, cy, data.name, data.level, math.floor(anim.dist + 0.5), anim.hp)
@@ -585,7 +579,6 @@ local function renderOnscreen(slot, data, cfg, viewport, dt, t, index)
         return
     end
 
-    -- Unhide and render onscreen
     hideSlot(slot)
 
     local accent = STATE.theme.accent
@@ -874,7 +867,6 @@ function STATE.Unload()
     _G.__DW_MATCHA_MOCK_ESP_V2 = nil
 end
 
--- ==================== MAIN LOOP ====================
 STATE.conn = RunService.RenderStepped:Connect(function()
     if not STATE.alive then return end
 
@@ -911,7 +903,6 @@ STATE.conn = RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- Hide unused slots
     for i = slotIdx, MAX_PLAYERS do
         hideSlot(STATE.slots[i])
     end
