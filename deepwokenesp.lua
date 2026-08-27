@@ -1,7 +1,6 @@
 --[[
     Deepwoken / Matcha External ESP (Production Fixed)
-    Real data extraction, 3D to 2D camera projection.
-    Matcha native UI, Drawing API, zero-instance footprint.
+    Manual 3D-2D projection, Matcha native UI, zero-instance footprint.
 ]]
 
 local old = rawget(_G, "__DW_MATCHA_MOCK_ESP_V2") or rawget(_G, "__DW_MATCHA_MOCK_ESP")
@@ -17,7 +16,6 @@ local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
 
 local STATE = {
     alive = true,
@@ -31,8 +29,8 @@ local STATE = {
 _G.__DW_MATCHA_MOCK_ESP_V2 = STATE
 
 local EXEC_NAME, EXEC_VERSION = identifyexecutor()
-local TAB_MAIN = "DW ESP v2"
-local TAB_CFG  = "DW ESP Theme"
+local TAB_MAIN = "Deep ESP"
+local TAB_CFG  = "Deep Theme"
 
 local FONT_ITEMS = {
     { name = "UI",         value = Drawing.Fonts.UI },
@@ -186,6 +184,26 @@ local function copyPalette(index)
 end
 copyPalette(0)
 
+-- ==================== MANUAL 3D TO 2D PROJECTION ====================
+local function projectToScreen(worldPos, camera, viewportSize)
+    local cframe = camera.CFrame
+    local relative = cframe:PointToObjectSpace(worldPos)
+    
+    -- relative.Z is negative if in front of the camera
+    if relative.Z > -0.001 then
+        return Vector2.new(0, 0), false
+    end
+    
+    local fovRad = math.rad(camera.FieldOfView)
+    local yScale = math.tan(fovRad / 2)
+    local xScale = yScale * (viewportSize.X / viewportSize.Y)
+    
+    local x = (relative.X / -relative.Z) / xScale
+    local y = (relative.Y / -relative.Z) / yScale
+    
+    return Vector2.new((1 + x) * 0.5 * viewportSize.X, (1 - y) * 0.5 * viewportSize.Y), true
+end
+
 -- ==================== DRAWING WRAPPERS ====================
 local function makeSquare(z)
     local sq = Drawing.new("Square")
@@ -210,7 +228,7 @@ local function makeText(z, size, font, center)
     tx.ZIndex = z or 1
     tx.Center = center ~= false
     tx.Outline = true
-    tx.Size = size or 12 -- ИСПРАВЛЕНО: FontSize -> Size
+    tx.Size = size or 12
     tx.Font = font or Drawing.Fonts.System
     return tx
 end
@@ -240,7 +258,7 @@ local function applyText(tx, text, x, y, color, alpha, size, font, z, center)
     tx.Position = Vector2.new(x, y)
     tx.Color = color
     tx.Transparency = alpha
-    tx.Size = size or tx.Size -- ИСПРАВЛЕНО: FontSize -> Size
+    tx.Size = size or tx.Size
     tx.Font = font or tx.Font
     tx.ZIndex = z or tx.ZIndex
     tx.Center = center ~= false
@@ -534,9 +552,10 @@ local function renderOffscreen(slot, cfg, viewport, cx, cy, name, level, dist, h
     end
 end
 
-local function renderOnscreen(slot, data, cfg, viewport, dt, t, index)
-    local headScreen, headOnScreen = Camera:WorldToViewportPoint(data.headPos)
-    local feetScreen, feetScreenOn = Camera:WorldToViewportPoint(data.rootPos - Vector3.new(0, 3, 0))
+local function renderOnscreen(slot, data, cfg, camera, viewport, dt, t, index)
+    -- ИСПОЛЬЗУЕМ НАШУ РУЧНУЮ ПРОЕКЦИЮ
+    local headScreen, headOnScreen = projectToScreen(data.headPos, camera, viewport)
+    local feetScreen, feetScreenOn = projectToScreen(data.rootPos - Vector3.new(0, 3, 0), camera, viewport)
 
     local targetX = (headScreen.X + feetScreen.X) * 0.5
     local targetY = headScreen.Y
@@ -717,7 +736,7 @@ local function renderHud(cfg, viewport)
     local y = 22
     applySquare(STATE.hud.shadow, x - 4, y - 4, 250, 54, STATE.theme.shadow, 0.50, 20, 14)
     applySquare(STATE.hud.panel, x, y, 242, 46, STATE.theme.glass, clamp(alpha255(STATE.theme.glassAlpha) + 0.04, 0, 1), 21, 14)
-    applyText(STATE.hud.title, "Deepwoken Matcha ESP v2", x + 12, y + 8, STATE.theme.text, 1, 14, Drawing.Fonts.SystemBold, 22, false)
+    applyText(STATE.hud.title, "Deepwoken Matcha ESP", x + 12, y + 8, STATE.theme.text, 1, 14, Drawing.Fonts.SystemBold, 22, false)
     applyText(STATE.hud.sub, string.format("%s • %s • %dx%d", STATE.theme.paletteName or "Deep Mist", cfg.compact and "compact" or "glass", viewport.X, viewport.Y), x + 12, y + 24, STATE.theme.subtext, 1, 11, Drawing.Fonts.Monospace, 22, false)
     applyText(STATE.hud.state, string.format("%s %s", EXEC_NAME, EXEC_VERSION), x + 168, y + 8, STATE.theme.accent, alpha255(STATE.theme.accentAlpha), 10, Drawing.Fonts.UI, 22, false)
 end
@@ -835,7 +854,7 @@ UI.AddTab(TAB_CFG, function(tab)
         secR:InputText("dw_v2_info_exec", "Executor", string.format("%s %s", EXEC_NAME, EXEC_VERSION))
     elseif secR.page == 1 then
         secR:Button("Notify loaded", 160, 26, function()
-            notify("Deepwoken Matcha ESP v2 active", TAB_MAIN, 3)
+            notify("Deepwoken Matcha ESP active", TAB_MAIN, 3)
         end)
         secR:Button("Preset Deep Mist", 160, 26, function()
             applyPresetDefaults(0)
@@ -871,7 +890,7 @@ STATE.conn = RunService.RenderStepped:Connect(function()
     if not STATE.alive then return end
 
     local camera = Workspace.CurrentCamera
-    if not camera then return end
+    if not camera or not camera.CFrame or not camera.FieldOfView then return end
 
     local now = tick()
     local dt = clamp(now - (STATE.lastTick or now), 0.001, 0.05)
@@ -897,7 +916,7 @@ STATE.conn = RunService.RenderStepped:Connect(function()
         if player ~= LocalPlayer then
             local data = extractData(player)
             if data and slotIdx <= MAX_PLAYERS then
-                renderOnscreen(STATE.slots[slotIdx], data, cfg, viewport, dt, now, slotIdx)
+                renderOnscreen(STATE.slots[slotIdx], data, cfg, camera, viewport, dt, now, slotIdx)
                 slotIdx = slotIdx + 1
             end
         end
@@ -908,4 +927,4 @@ STATE.conn = RunService.RenderStepped:Connect(function()
     end
 end)
 
-notify("Loaded Deepwoken Matcha ESP v2", TAB_MAIN, 4)
+notify("Loaded Deepwoken Matcha ESP", TAB_MAIN, 4)
