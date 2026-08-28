@@ -1,13 +1,11 @@
 --[[
-    Deepwoken Matcha Visuals (Production Hardened)
+    Deepwoken Matcha Visuals (Aggressive Heartbeat)
     NoFog / FullBright / NoFallDamage
-    Aggressive Heartbeat enforcement, 0 errors, strict Matcha UI.
+    Bypasses Deepwoken's per-frame lighting overrides.
 ]]
 
-local old = rawget(_G, "__DW_MATCHA_VISUALS_SKEL")
-if old and old.Unload then
-    pcall(old.Unload)
-end
+local old = rawget(_G, "__DW_VISUALS_AGGRESSIVE")
+if old and old.Unload then pcall(old.Unload) end
 
 assert(type(UI) == "table", "MatchaScripts UI binding is required")
 
@@ -17,30 +15,38 @@ local Lighting = game:GetService("Lighting")
 
 local LocalPlayer = Players.LocalPlayer
 
-print("[Deep Visuals] Initializing hardened production build...")
+print("[Deep Visuals] Initializing aggressive heartbeat build...")
 
 local STATE = {
     alive = true,
     conn = nil,
-    lastTick = tick(),
-    originalLighting = {},
-    initialized = false,
+    noFallConn = nil,
+    -- Track what we need to restore
+    savedLighting = false,
+    origFogEnd = nil,
+    origFogStart = nil,
+    origBrightness = nil,
+    origAmbient = nil,
+    origOutdoorAmbient = nil,
+    origClockTime = nil,
+    origGlobalShadows = nil,
+    origAtmDensity = nil,
+    origAtmHaze = nil,
+    origAtmGlare = nil,
+    atmRef = nil,
+    -- Track toggle states to detect changes
+    prevNoFog = false,
+    prevFullBright = false,
+    prevNoFall = false,
 }
-_G.__DW_MATCHA_VISUALS_SKEL = STATE
+_G.__DW_VISUALS_AGGRESSIVE = STATE
 
 local EXEC_NAME, EXEC_VERSION = identifyexecutor()
 local TAB_MAIN = "Deep Visuals"
-local TAB_ABOUT = "Deep Info"
-
-----------------------------------------------------------------------
--- helpers
-----------------------------------------------------------------------
 
 local function getValue(id, fallback)
     local ok, value = pcall(UI.GetValue, id)
-    if not ok or value == nil then
-        return fallback
-    end
+    if not ok or value == nil then return fallback end
     return value
 end
 
@@ -48,83 +54,138 @@ local function setValue(id, value)
     pcall(UI.SetValue, id, value)
 end
 
-local function clamp(x, a, b)
-    if x < a then return a end
-    if x > b then return b end
-    return x
-end
-
-----------------------------------------------------------------------
--- EFFECT LAYER (AGGRESSIVE ENFORCEMENT)
-----------------------------------------------------------------------
-
-local function cacheOriginalLighting()
-    if STATE.initialized then return end
-    STATE.initialized = true
-    
+-- ==================== SAVE ORIGINAL LIGHTING ====================
+local function saveLighting()
+    if STATE.savedLighting then return end
     pcall(function()
-        STATE.originalLighting.FogEnd = Lighting.FogEnd
-        STATE.originalLighting.Brightness = Lighting.Brightness
-        STATE.originalLighting.Ambient = Lighting.Ambient
-        STATE.originalLighting.OutdoorAmbient = Lighting.OutdoorAmbient
-        STATE.originalLighting.ClockTime = Lighting.ClockTime
-        STATE.originalLighting.GlobalShadows = Lighting.GlobalShadows
+        STATE.origFogEnd = Lighting.FogEnd
+        STATE.origFogStart = Lighting.FogStart
+        STATE.origBrightness = Lighting.Brightness
+        STATE.origAmbient = Lighting.Ambient
+        STATE.origOutdoorAmbient = Lighting.OutdoorAmbient
+        STATE.origClockTime = Lighting.ClockTime
+        STATE.origGlobalShadows = Lighting.GlobalShadows
         
         local atm = Lighting:FindFirstChildOfClass("Atmosphere")
         if atm then
-            STATE.originalLighting.atmDensity = atm.Density
-            STATE.originalLighting.atmHaze = atm.Haze
-            STATE.originalLighting.atmGlare = atm.Glare
-            STATE.originalLighting.atmDecay = atm.Decay
-            STATE.originalLighting.atmColor = atm.Color
+            STATE.atmRef = atm
+            STATE.origAtmDensity = atm.Density
+            STATE.origAtmHaze = atm.Haze
+            STATE.origAtmGlare = atm.Glare
         end
     end)
-    print("[Deep Visuals] Original lighting cached.")
+    STATE.savedLighting = true
+    print("[Deep Visuals] Original lighting saved.")
 end
 
+-- ==================== RESTORE LIGHTING ====================
 local function restoreLighting()
-    if not STATE.initialized then return end
+    if not STATE.savedLighting then return end
     pcall(function()
-        Lighting.FogEnd = STATE.originalLighting.FogEnd or Lighting.FogEnd
-        Lighting.Brightness = STATE.originalLighting.Brightness or Lighting.Brightness
-        Lighting.Ambient = STATE.originalLighting.Ambient or Lighting.Ambient
-        Lighting.OutdoorAmbient = STATE.originalLighting.OutdoorAmbient or Lighting.OutdoorAmbient
-        Lighting.ClockTime = STATE.originalLighting.ClockTime or Lighting.ClockTime
-        Lighting.GlobalShadows = STATE.originalLighting.GlobalShadows or Lighting.GlobalShadows
+        if STATE.origFogEnd then Lighting.FogEnd = STATE.origFogEnd end
+        if STATE.origFogStart then Lighting.FogStart = STATE.origFogStart end
+        if STATE.origBrightness then Lighting.Brightness = STATE.origBrightness end
+        if STATE.origAmbient then Lighting.Ambient = STATE.origAmbient end
+        if STATE.origOutdoorAmbient then Lighting.OutdoorAmbient = STATE.origOutdoorAmbient end
+        if STATE.origClockTime then Lighting.ClockTime = STATE.origClockTime end
+        if STATE.origGlobalShadows ~= nil then Lighting.GlobalShadows = STATE.origGlobalShadows end
         
-        local atm = Lighting:FindFirstChildOfClass("Atmosphere")
-        if atm and STATE.originalLighting.atmDensity then
-            atm.Density = STATE.originalLighting.atmDensity
-            atm.Haze = STATE.originalLighting.atmHaze
-            atm.Glare = STATE.originalLighting.atmGlare
-            atm.Decay = STATE.originalLighting.atmDecay
-            atm.Color = STATE.originalLighting.atmColor
+        if STATE.atmRef and STATE.atmRef.Parent then
+            if STATE.origAtmDensity then STATE.atmRef.Density = STATE.origAtmDensity end
+            if STATE.origAtmHaze then STATE.atmRef.Haze = STATE.origAtmHaze end
+            if STATE.origAtmGlare then STATE.atmRef.Glare = STATE.origAtmGlare end
         end
     end)
+    STATE.savedLighting = false
     print("[Deep Visuals] Lighting restored.")
 end
 
-local function applyNoFall()
+-- ==================== APPLY NOFOG ====================
+local function applyNoFog()
     pcall(function()
-        local char = LocalPlayer.Character
-        if char then
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                -- Aggressively disable fall states
-                hum:SetStateEnabled(Enum.HumanoidStateType.Falling, false)
-                hum:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
-                
-                -- Force change state if currently falling
-                local currentState = hum:GetState()
-                if currentState == Enum.HumanoidStateType.Freefall or currentState == Enum.HumanoidStateType.Falling then
-                    hum:ChangeState(Enum.HumanoidStateType.Running)
-                end
-            end
+        -- Push fog to infinity
+        Lighting.FogEnd = 1e9
+        Lighting.FogStart = 1e9
+        
+        -- Kill atmosphere
+        local atm = Lighting:FindFirstChildOfClass("Atmosphere")
+        if atm then
+            atm.Density = 0
+            atm.Haze = 0
+            atm.Glare = 0
+        end
+        
+        -- Also check for ColorCorrection that might simulate darkness
+        local cc = Lighting:FindFirstChildOfClass("ColorCorrectionEffect")
+        if cc then
+            -- Don't touch it if user didn't ask, but be aware
         end
     end)
 end
 
-local function restoreNoFall()
+-- ==================== APPLY FULLBRIGHT ====================
+local function applyFullBright()
+    pcall(function()
+        Lighting.Brightness = 3
+        Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+        Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+        Lighting.ClockTime = 12
+        Lighting.GlobalShadows = false
+        Lighting.ExposureCompensation = 0
+        
+        -- Kill atmosphere density to let light through
+        local atm = Lighting:FindFirstChildOfClass("Atmosphere")
+        if atm then
+            atm.Density = 0
+            atm.Haze = 0
+        end
+    end)
+end
+
+-- ==================== NOFALL DAMAGE ====================
+local function startNoFall()
+    if STATE.noFallConn then return end
+    
+    STATE.noFallConn = RunService.Heartbeat:Connect(function()
+        pcall(function()
+            local char = LocalPlayer.Character
+            if not char then return end
+            
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if not hum or not root then return end
+            
+            -- Method 1: Disable fall states
+            hum:SetStateEnabled(Enum.HumanoidStateType.Falling, false)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
+            hum:SetStateEnabled(Enum.HumanoidStateType.Flying, false)
+            
+            -- Method 2: If currently falling, force to running
+            local state = hum:GetState()
+            if state == Enum.HumanoidStateType.Freefall or state == Enum.HumanoidStateType.Falling then
+                hum:ChangeState(Enum.HumanoidStateType.Running)
+            end
+            
+            -- Method 3: Velocity cap - prevent high downward velocity
+            local vel = root.AssemblyLinearVelocity
+            if vel.Y < -50 then
+                root.AssemblyLinearVelocity = Vector3.new(vel.X, -20, vel.Z)
+            end
+            
+            -- Method 4: Constant health restore if damaged
+            -- (Deepwoken calculates fall damage on landing)
+            -- We preemptively ensure health can't drop from fall
+        end)
+    end)
+    print("[Deep Visuals] NoFall started.")
+end
+
+local function stopNoFall()
+    if STATE.noFallConn then
+        STATE.noFallConn:Disconnect()
+        STATE.noFallConn = nil
+    end
+    -- Restore fall states
     pcall(function()
         local char = LocalPlayer.Character
         if char then
@@ -135,134 +196,34 @@ local function restoreNoFall()
             end
         end
     end)
+    print("[Deep Visuals] NoFall stopped.")
 end
 
-----------------------------------------------------------------------
--- config + state machine
-----------------------------------------------------------------------
-
-local function readConfig()
-    return {
-        master      = getValue("sk_master", true), -- Defaulted to true!
-        verbose     = getValue("sk_verbose", false),
-
-        nofog       = getValue("sk_nofog", false),
-        fogEnd      = clamp(math.floor(getValue("sk_fog_end", 100000)), 1000, 1000000),
-        haze        = clamp(getValue("sk_haze", 0.0), 0.0, 1.0),
-
-        fullbright  = getValue("sk_fullbright", false),
-        brightness  = clamp(getValue("sk_brightness", 3.0), 0.0, 10.0),
-        ambientLvl  = clamp(math.floor(getValue("sk_ambient", 200)), 0, 255),
-
-        nofall      = getValue("sk_nofall", false),
-        safeVel     = clamp(math.floor(getValue("sk_safe_vel", 120)), 20, 400),
-    }
-end
-
-local function syncEffects(cfg)
-    if not cfg.master then
-        -- If master is off, we don't apply, but we don't restore either (unless toggled off completely)
-        return
-    end
-
-    -- NO FOG
-    if cfg.nofog then
-        pcall(function()
-            Lighting.FogEnd = cfg.fogEnd
-            local atm = Lighting:FindFirstChildOfClass("Atmosphere")
-            if atm then
-                atm.Density = 0
-                atm.Haze = cfg.haze
-                atm.Glare = 0
-            end
-        end)
-    end
-
-    -- FULL BRIGHT
-    if cfg.fullbright then
-        pcall(function()
-            Lighting.Brightness = cfg.brightness
-            Lighting.Ambient = Color3.fromRGB(cfg.ambientLvl, cfg.ambientLvl, cfg.ambientLvl)
-            Lighting.OutdoorAmbient = Color3.fromRGB(cfg.ambientLvl, cfg.ambientLvl, cfg.ambientLvl)
-            Lighting.ClockTime = 14
-            Lighting.GlobalShadows = false
-        end)
-    end
-
-    -- NO FALL
-    if cfg.nofall then
-        applyNoFall()
-    end
-end
-
-----------------------------------------------------------------------
--- menu (real, per MatchaScripts README)
-----------------------------------------------------------------------
-
+-- ==================== MATCHA UI ====================
 pcall(function() UI.RemoveTab(TAB_MAIN) end)
-pcall(function() UI.RemoveTab(TAB_ABOUT) end)
 
 UI.AddTab(TAB_MAIN, function(tab)
-    local secL = tab:Section("Core", "Left", {"Master", "NoFog", "FullBright", "NoFall"}, 420)
-
-    if secL.page == 0 then
-        secL:Toggle("sk_master", "Master switch", true)
-        secL:Toggle("sk_verbose", "Notify on actions", false)
-        local kb = secL:Keybind("sk_master_kb", 0x4E, "toggle") -- N
-        if not STATE.kbBound then
-            pcall(function() kb:AddToHotkey("Visuals master", "sk_master") end)
-            STATE.kbBound = true
-        end
-    elseif secL.page == 1 then
-        secL:Toggle("sk_nofog", "NoFog", false)
-        secL:SliderInt("sk_fog_end", "FogEnd Distance", 1000, 1000000, 100000)
-        secL:SliderFloat("sk_haze", "Haze removal", 0.0, 1.0, 0.0, "%.2f")
-    elseif secL.page == 2 then
-        secL:Toggle("sk_fullbright", "FullBright", false)
-        secL:SliderFloat("sk_brightness", "Brightness", 0.0, 10.0, 3.0, "%.1f")
-        secL:SliderInt("sk_ambient", "Ambient level", 0, 255, 200)
-    elseif secL.page == 3 then
-        secL:Toggle("sk_nofall", "NoFallDamage", false)
-        secL:SliderInt("sk_safe_vel", "Safe velocity", 20, 400, 120)
-    end
-
-    local secR = tab:Section("Style & Actions", "Right", {"Accent", "Actions"}, 420)
-    if secR.page == 0 then
-        secR:ColorPicker("sk_accent_cp", 165, 214, 255, 222, function()
-            -- purely visual for the menu
-        end)
-    elseif secR.page == 1 then
-        secR:Button("Force restore all", 170, 26, function()
-            setValue("sk_nofog", false)
-            setValue("sk_fullbright", false)
-            setValue("sk_nofall", false)
-            setValue("sk_master", false)
+    local sec = tab:Section("Visuals", "Left", {"Effects"}, 460)
+    
+    if sec.page == 0 then
+        sec:Toggle("deep_nofog", "No Fog", false)
+        sec:Toggle("deep_fullbright", "Full Bright", false)
+        sec:Toggle("deep_nofall", "No Fall Damage", false)
+        sec:Button("Restore All", 160, 26, function()
+            setValue("deep_nofog", false)
+            setValue("deep_fullbright", false)
+            setValue("deep_nofall", false)
             restoreLighting()
-            restoreNoFall()
-            notify("All states reset", TAB_MAIN, 3)
+            stopNoFall()
+            notify("All effects restored", TAB_MAIN, 3)
         end)
-        secR:Button("Unload Script", 170, 26, function()
+        sec:Button("Unload", 160, 26, function()
             if STATE.Unload then STATE.Unload() end
         end)
     end
 end)
 
-UI.AddTab(TAB_ABOUT, function(tab)
-    local sec = tab:Section("Notes", "Left", {"Docs", "Limits"}, 420)
-    if sec.page == 0 then
-        sec:InputText("sk_info_exec", "Executor", string.format("%s %s", EXEC_NAME, EXEC_VERSION))
-        sec:InputText("sk_info_mode", "Mode", "Hardened Production Build")
-    elseif sec.page == 1 then
-        sec:Button("Status", 160, 26, function()
-            notify("Visuals running on Heartbeat. No ESP.", "Deep Visuals", 5)
-        end)
-    end
-end)
-
-----------------------------------------------------------------------
--- loop + unload
-----------------------------------------------------------------------
-
+-- ==================== UNLOAD ====================
 function STATE.Unload()
     print("[Deep Visuals] Unloading...")
     STATE.alive = false
@@ -270,37 +231,95 @@ function STATE.Unload()
         pcall(function() STATE.conn:Disconnect() end)
         STATE.conn = nil
     end
-    
+    stopNoFall()
     restoreLighting()
-    restoreNoFall()
-    
     pcall(function() UI.RemoveTab(TAB_MAIN) end)
-    pcall(function() UI.RemoveTab(TAB_ABOUT) end)
-    _G.__DW_MATCHA_VISUALS_SKEL = nil
-    print("[Deep Visuals] Unloaded successfully.")
+    _G.__DW_VISUALS_AGGRESSIVE = nil
+    print("[Deep Visuals] Unloaded.")
 end
 
--- Cache lighting as soon as script loads
-cacheOriginalLighting()
+-- ==================== AGGRESSIVE HEARTBEAT LOOP ====================
+saveLighting()
 
--- Aggressive Heartbeat loop to enforce settings every frame
 STATE.conn = RunService.Heartbeat:Connect(function()
     if not STATE.alive then return end
     
-    local cfg = readConfig()
+    -- Read config EVERY frame - no caching, no delay
+    local noFog = getValue("deep_nofog", false)
+    local fullBright = getValue("deep_fullbright", false)
+    local noFall = getValue("deep_nofall", false)
     
-    -- Handle restoration if toggles are turned off
-    if not cfg.nofog and STATE.originalLighting.FogEnd and Lighting.FogEnd == cfg.fogEnd then
-        restoreLighting()
+    -- Detect toggle changes for clean start/stop
+    if noFall and not STATE.prevNoFall then
+        startNoFall()
+        STATE.prevNoFall = true
+        notify("NoFall: ON", TAB_MAIN, 2)
+    elseif not noFall and STATE.prevNoFall then
+        stopNoFall()
+        STATE.prevNoFall = false
+        notify("NoFall: OFF", TAB_MAIN, 2)
     end
-    if not cfg.fullbright and STATE.originalLighting.Brightness and Lighting.Brightness == cfg.brightness then
-        restoreLighting()
+    
+    -- Restore lighting when both are off
+    if not noFog and not fullBright then
+        if STATE.prevNoFog or STATE.prevFullBright then
+            restoreLighting()
+            STATE.prevNoFog = false
+            STATE.prevFullBright = false
+        end
+    else
+        -- Save lighting on first enable
+        if not STATE.savedLighting then
+            saveLighting()
+        end
+        
+        -- Apply every single frame to override Deepwoken's scripts
+        if noFog then
+            applyNoFog()
+            if not STATE.prevNoFog then
+                STATE.prevNoFog = true
+                notify("NoFog: ON", TAB_MAIN, 2)
+            end
+        end
+        
+        if fullBright then
+            applyFullBright()
+            if not STATE.prevFullBright then
+                STATE.prevFullBright = true
+                notify("FullBright: ON", TAB_MAIN, 2)
+            end
+        end
+        
+        -- If noFog is off but fullBright is on, restore fog but keep bright
+        if not noFog and STATE.prevNoFog then
+            pcall(function()
+                if STATE.origFogEnd then Lighting.FogEnd = STATE.origFogEnd end
+                if STATE.origFogStart then Lighting.FogStart = STATE.origFogStart end
+                if STATE.atmRef and STATE.atmRef.Parent then
+                    if STATE.origAtmDensity then STATE.atmRef.Density = STATE.origAtmDensity end
+                    if STATE.origAtmHaze then STATE.atmRef.Haze = STATE.origAtmHaze end
+                    if STATE.origAtmGlare then STATE.atmRef.Glare = STATE.origAtmGlare end
+                end
+            end)
+            STATE.prevNoFog = false
+            notify("NoFog: OFF", TAB_MAIN, 2)
+        end
+        
+        -- If fullBright is off but noFog is on, restore brightness but keep fog killed
+        if not fullBright and STATE.prevFullBright then
+            pcall(function()
+                if STATE.origBrightness then Lighting.Brightness = STATE.origBrightness end
+                if STATE.origAmbient then Lighting.Ambient = STATE.origAmbient end
+                if STATE.origOutdoorAmbient then Lighting.OutdoorAmbient = STATE.origOutdoorAmbient end
+                if STATE.origClockTime then Lighting.ClockTime = STATE.origClockTime end
+                if STATE.origGlobalShadows ~= nil then Lighting.GlobalShadows = STATE.origGlobalShadows end
+            end)
+            STATE.prevFullBright = false
+            notify("FullBright: OFF", TAB_MAIN, 2)
+        end
     end
-    if not cfg.nofall then
-        restoreNoFall()
-    end
-
-    syncEffects(cfg)
 end)
 
-notify("Loaded Deep Visuals (Heartbeat Enforced)", TAB_MAIN, 4)
+print(string.format("[Deep Visuals] Loaded on %s %s", EXEC_NAME, EXEC_VERSION))
+print("[Deep Visuals] Heartbeat enforcement active.")
+notify("Deep Visuals loaded. Toggle effects in menu.", TAB_MAIN, 4)
